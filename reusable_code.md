@@ -4,7 +4,7 @@ It is best to refer to original `ukbb_parser` documentation at https://github.co
 * **Non-genetic data (e.g. clinical factors):** available on `load_data.py` (Hieu)
     * import: `ukbb_parser.create_dataset`
 * **Non-imputed genetic data:** available on `load_data.py` (Hieu)
-    * imports: `ukbb_parser.get_chrom_raw_marker_data`, `pandas_plin
+    * imports: `ukbb_parser.get_chrom_raw_marker_data`, `pandas_plink`
 ## Feature Selection
 * **$χ^2$ test:** available on `RunFeatureSelection.py` (Cole), line 39  
     * import: `sklearn.feature_selection.chi2` 
