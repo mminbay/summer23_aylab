@@ -11,8 +11,9 @@ $ source /shared/devenvs/AyLab/conda/bin/activate
 ```
 You can check which conda installation you are using at any time with the command `which conda`.  
 ### Dependencies – Personal Device
+
 If you will be running this code on your personal device, the dependencies (at least the ones I remember lol) are listed in `requirements.txt`. Make sure to install them before you run any code. Some of them might need to be installed through different channels.  
-Dependency `ukbb_parser` (not listed in `requirements.txt`) is not to be installed through any package manager. Instead, follow the steps at https://github.com/nadavbra/ukbb_parser/tree/master#installation.
+The `ukbb_parser` module (not listed in `requirements.txt`) is not to be installed through any package manager. Instead, follow the steps at https://github.com/nadavbra/ukbb_parser/tree/master#installation.
 ### Installing UKBB Helper Programs
 
 UK Biobank has several helper programs that are required to work with UKBB data (more information on https://biobank.ctsu.ox.ac.uk/~bbdatan/Data_Access_Guide_v3.1.pdf. There might be a newer version when you are reading this, check at https://biobank.ctsu.ox.ac.uk/crystal/exinfo.cgi?src=accessing_data_guide)
@@ -39,6 +40,7 @@ $ wget  -nd  biobank.ndph.ox.ac.uk/ukb/util/ukbconv
 $ chmod 755 ukbconv
 ```
 ### Moving and Unpacking your UKBB Data
+
 1. Make a directory for data at the root of the repository. Again, directory name `data` is already included in `.gitignore`, but feel free to make your own adjustments.
 ```
 $ mkdir data
@@ -60,10 +62,16 @@ $ ./ukbconv ../data/<data_file>.enc_ukb csv
 ```  
 Feel free to delete the resultant `.log` file and reorganize your `data` folder as you wish after this step.
 
+### Relocating `.ukbb_paths.py`
+
+The `ukbb_parser` module assumes the existence of a `.ukbb_paths.py` file at **the root of your user directory** (`~/.ukbb_paths.py`). Move this file to the appropriate directory and follow comments on the file to make the necessary changes.
+
 ### Accessing UKBB Genetic Data – Cluster
+
 ***TODO: IMPLEMENT THIS PART***
 
 ### Accessing Genetic UKBB Data – Personal Device (NOT RECOMMENDED)
+
 ***TODO: IMPLEMENT THIS PART***
 
 ## additional resources in this repository  
