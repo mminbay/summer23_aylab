@@ -35,8 +35,21 @@ chmod 755 ukbconv
 mkdir data
 cd data
 ```
-2. Using your preferred method (VSCode, Cyberduck, etc.), move your encrypted data to the directory you just created.
-3. The following steps are not required if your data is already in the desired format (no `.enc` extension)
+2. Using your preferred method (VSCode, Cyberduck, etc.), move your encrypted data to the directory you just created.  
+
+The following steps are not required if your data is already in the desired format (no `.enc` extension)  
+
+3. Using your preferred method (VSCode, Cyberduck, etc.), move the `.key` file that you received with the download to the directory you just created.  
+4. Use `ukbunpack` to unpack the data file you have uploaded. Change the filenames below accordingly for your case. This step should create a `.enc_ukb` file.
+```
+cd ../ukbb_util
+./ukbunpack ../data/<data_file>.enc ../data/<key_file>.key
+```
+5. Use `ukbconv` to convert the unpacked data to `.csv` format (or any other format you will work with: check link provided above for additional options).
+```
+./ukbconv ../data/<data_file>.enc_ukb csv
+```  
+Feel free to delete the resultant `.log` file and reorganize your `data` folder as you wish after this step.
 
 ## additional resources in this repository  
 Check `reusable_code.md` for functions from Hieu and Cole's code that we might use.
