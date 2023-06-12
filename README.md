@@ -74,5 +74,8 @@ The `ukbb_parser` module assumes the existence of a `.ukbb_paths.py` file at **t
 
 ***TODO: IMPLEMENT THIS PART***
 
+### Configuring `.env`  
+Since you might want to organize your `data` folder as you wish, there is a `.env.example` provided in this repository. Set the environment variables as appropriate and rename the file to `.env` to make it usable.
+
 ## additional resources in this repository  
 Check `reusable_code.md` for functions from Hieu and Cole's code that we might use.
