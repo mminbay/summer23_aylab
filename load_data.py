@@ -6,19 +6,29 @@ from bgen.reader import BgenFile as bf
 
 '''
 This class is meant to be used as a way to compile your genetic/phenotype/etc. data into a single .csv 
-for easier use in your project. 
+for easier use in your project. Check an example usage at the end of this file.
 '''
 
 class DataLoader():
     # TODO: implement init
     def __init__(
         self,
-        genetics_path = "/path/to/genetics.bgen"
+        genetics_folder = '/path/to/genetics/',
+        genetics_format = 'ukb22438_c{}_b0_v2.bgen',
+        imputed_ids_path = '/path/to/imputed/ids.csv',
+        out_folder = '/path/to/out_folder/'
     ):
-        self.cwd = '/home/mminbay/summer_research/summer23_aylab/'
-        self.OUT_FOLDER = os.path.join(self.cwd, 'data')
-
-        self.genetics_path = genetics_path
+        '''
+        Arguments:
+        genetics_folder -- where this instace will look for .bgen files (imputed genetic info)
+        genetics_format -- name format for .bgen files, where {} will be replaced by chromosome number. note the data field 
+        imputed_ids_path -- path to the .csv file which contains the participant id's in the same order as they appear in the .bgen files
+        out_folder -- where this instance will write files to
+        '''
+        self.genetics_folder = genetics_folder
+        self.genetics_format = genetics_format
+        self.imputed_ids_path = imputed_ids_path
+        self.out_folder = out_folder
 
         # for later reuse with other types of data fields
         self.tables = []
@@ -46,7 +56,7 @@ class DataLoader():
         data.drop(data.index[to_drop], inplace=True)
     
     # Actual data processing
-    def loadChromsAndRsidsFromList(self, file=os.path.join("/home/mminbay/summer_research/summer23_aylab/data/snps", "allSNPs.txt")):
+    def loadChromsAndRsidsFromList(self, file):
         '''
         Reads given .txt file and stores list of chroms and rsids as instance variables
         
@@ -77,12 +87,13 @@ class DataLoader():
         self.chroms = chroms
         self.rsids = rsids
 
-    def loadChromsAndRsidsFromInterval(self, file=os.path.join("/home/mminbay/summer_research/summer23_aylab/data/snps", "intervals.txt")):
+    def loadChromsAndRsidsFromInterval(self, file):
         '''
         Reads given .txt file and stores list of chroms and intervals as instance variables
         
         Arguments:
-        file -- Path to the .txt file containing the interval information. The .txt file should have the format <chrom_number>, <interval_start>-<interval_end> for every line
+        file -- Path to the .txt file containing the interval information. The .txt file should have the format <chrom_number>, <interval_start>-<interval_end>
+        for every line
     
         Modified instance variables:
         chroms -- list of chromosomes 
@@ -133,7 +144,8 @@ class DataLoader():
         df = df.transpose()
         df["ID_1"] = df.index.astype(int)
         return df
-    
+
+    # TODO: re-implement this to work with self.tables
     def getImputedGeneticInformationFromList(self):
         '''
         Uses bgen.reader to get imputed genetic information on stored rsids and chroms. Save results into separate .csv for each chromosome
@@ -171,9 +183,20 @@ class DataLoader():
             outFile = os.path.join(self.cwd, "Data", "imputed_{}.csv".format(chroms[i]))
             df.to_csv(outFile)
 
-    def getImputedGeneticInformationFromIntervals(self, extra = 5000):
+    def getImputedGeneticInformationFromIntervals(
+        self, 
+        extra = 5000, 
+        export_name = 'imputed_{}.csv',
+        keep_track_as = 'path'
+    ):
         '''
-        Uses bgen.reader to get imputed genetic information on stored chroms and intervals. Save results into separate .csv for each chromosome
+        Uses bgen.reader to get imputed genetic information on stored chroms and intervals.
+
+        Arguments:
+        extra -- number of base pairs subtracted from interval starts and added to interval ends to stretch search intervals
+        export_name -- name format for export file for each chromosome, where {} will be chromosome number. pass empty string for no export
+        keep_track_as ('path', 'table', '') -- how this instance will store each chromosome data in self.tables. pass empty string for no storing.
+            note that 'path' option is useless if file isn't being exported.
         '''
 
         # if someone is refactoring this code please use a better bgen module, half the functions in this one do not even work
@@ -185,7 +208,7 @@ class DataLoader():
 
         for i in range(len(chroms)):
             current_chrom = chroms[i]
-            bfile = bf(os.path.join(self.genetics_path, 'ukb22828_c'+str(chroms[i])+'_b0_v3.bgen'))
+            bfile = bf(os.path.join(self.genetics_folder, self.genetics_format.format(str(current_chrom))))
             
             positions = bfile.positions()
             rsids = bfile.rsids()
@@ -217,12 +240,20 @@ class DataLoader():
                     indices.append(variant)
                     probabilities = bfile[k].probabilities
                     rows.append(probabilities.argmax(axis=1))
-            df = pd.DataFrame(rows, index=indices)
+            
+            df_tmp = pd.read_csv(self.imputed_ids_path, index_col=0)
+            df = pd.DataFrame(rows, index=indices, columns=df_tmp["ID_1"])
             df = df.transpose()
-            outFile = os.path.join(self.OUT_FOLDER, "imputed_{}.csv".format(chroms[i]))
-            df.to_csv(outFile)
-                    
-    def __calcPHQ9(self, binary_cutoff=10):
+            if export_name != '':
+                out_file = os.path.join(self.out_folder, export_name.format(chroms[i]))
+                df.to_csv(out_file)
+                if keep_track_as == 'path':
+                    self.tables.append(out_file)
+            if keep_track_as == 'table':
+                self.tables.append(df)
+
+    # TODO: make this general purpose
+    def calcPHQ9(self, binary_cutoff=10):
         '''
         Uses ukbb_parser to create a PHQ9 dataset with given columns. Stores created dataset in self.tables
     
@@ -291,25 +322,29 @@ class DataLoader():
         )
         fields["ID_1"] = eid
         for column, _, _ in columns:
-            __drop(fields, column)
+            self.__drop(fields, column)
         self.tables.append(fields)
 
-    def import_table(self, table_path):
+    def import_table(self, table_path, delay_parsing = False):
         '''
-        Read the .csv file given at table_path and store it as a pandas dataframe at self.tables
+        Read the .csv file given at table_path and store it at self.tables
 
         Arguments:
         table_path -- path to .csv file
+        delay_parsing -- if True, save the path instead of dataframe object and only open .csv when in use.
         '''
-        self.tables.append(pd.read_csv(table_path))
+        if delay_parsing:
+            self.tables.append(table_path)
+        else:
+            self.tables.append(pd.read_csv(table_path))
 
-    def export(self, on_col = 'ID_1', out = '/', ohe = []):
+    def export(self, on_col = 'ID_1', out = 'export.csv', ohe = []):
         '''
         Merge stored tables on given column and save as .csv at given path. 
 
         Arguments:
         on_col -- column to merge tables on
-        out -- path of output file
+        out -- name of output file
         ohe -- variables to one-hot encode
         '''
         if len(self.tables) == 0:
@@ -318,42 +353,52 @@ class DataLoader():
         final_table = self.tables[0]
         other_tables = self.tables[1:]
         for table in other_tables:
+            if type(table) == str:
+                table = pd.read_csv(table)
             final_table = final_table.merge(table, on = on_col, how = 'inner')
 
         for column in list(final_table.columns):
-            __drop(final_table, column)
+            self.__drop(final_table, column)
 
         # TODO: implement one hot encoding!
-        final_table.to_csv(out)
-        
+        final_table.to_csv(os.path.join(self.out_folder, out))
 
-        
+'''
+Below is an example usage
+'''
 
-# Your code goes here
-def main():
+# def main():
+#     dl = DataLoader(
+#         genetics_folder = '/shared/datalake/summer23Ay/data1/ukb_genetic_data',
+#         genetics_format = 'ukb22438_c{}_b0_v2.bgen',
+#         imputed_ids_path = '/shared/datalake/summer23Ay/data1/ukb_genetic_data/ukb22828_c1_b0_v3_s487166.csv',
+#         out_folder = '/home/mminbay/summer_research/summer23_aylab/data/'
+#     ) # create dataloader
+    
+#     dl.loadChromsAndRsidsFromInterval('/home/mminbay/summer_research/summer23_aylab/data/snps/intervals.txt') # load intervals
+    
+#     clinical_factors = [
+#         ("Sex", 31, "binary"),
+#         ("Age", 21022, "continuous"),
+#         ("Chronotype", 1180, "continuous"),
+#         ("Sleeplessness/Insomnia", 1200, "continuous"),
+#     ] # an example phenotype dataset
 
-    dl = DataLoader(genetics_path = '/shared/datalake/summer23Ay/data1/ukb_genetic_data')
-    dl.loadChromsAndRsidsFromInterval()
-    dl.getImputedGeneticInformationFromIntervals()
+#     dl.make_table(clinical_factors) # make dataset
 
-    # clinical factors
-    # clinical_factors = [
-    #     ("Sex", 31, "binary"),
-    #     ("Age", 21022, "continuous"),
-    #     ("Chronotype", 1180, "continuous"),
-    #     ("Sleeplessness/Insomnia", 1200, "continuous"),
-    # ]
+#     dl.calcPHQ9(binary_cutoff = 10) # make PHQ9 dataset
 
-    # # load data from ukbb
-    # clinical_factor_df = getClinicalFactor(clinical_factors)
-    # phq9_df = calcPHQ9()
-    # non_imputed_data = getGeneticInformation(chroms, rsids)
-    # data = combine_df(clinical_factor_df, non_imputed_data)
-    # data = combine_df(data, phq9_df)
-    # data.to_csv(os.path.join(OUT_FOLDER, 'test.csv'))
+#     dl.getImputedGeneticInformationFromIntervals(
+#         extra = 5000, 
+#         export_name = 'haplotype_imputed_{}.csv',
+#         keep_track_as = 'table'
+#     ) # make imputed genetic info dataset from loaded intervals
 
-if __name__ == '__main__':
-    main()
+#     dl.export(on_col = 'ID_1', out = 'export_test.csv') # export all informartion as a single table
+
+# if __name__ == "__main__":
+#     main()
+
 
 
 
