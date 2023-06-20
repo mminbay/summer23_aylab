@@ -108,7 +108,7 @@ class DataLoader():
             chrom = int(info[0])
             interval = info[1].strip()
             if prev_chrom >= 0 and prev_chrom == chrom:
-                interals[idx].append(interval)
+                intervals[idx].append(interval)
             else:
                 idx += 1
                 chroms.append(chrom)
