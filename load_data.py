@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import pandas as pd
-from ukbb_parser import create_dataset, get_chrom_raw_marker_data
+from ukbb_parser import create_dataset, get_chrom_raw_marker_data, create_ICD10_dataset
 from bgen.reader import BgenFile as bf
 import re
 
@@ -32,10 +32,10 @@ class DataLoader():
         self.out_folder = out_folder
 
         # for later reuse with other types of data fields
-        self.tables = []
+        self.tables = {}
 
     def __reset_tables(self):
-        self.tables = []
+        self.tables = {}
         
     # Helper methods to manage dataframes
     def __combine_df(self, df1, df2):
@@ -45,16 +45,13 @@ class DataLoader():
         final = pd.merge(df1, df2, on="ID_1", how="inner")
         return final
 
-    def __drop(self, data, column):
+    def __drop(self, data, columns):
         '''
         Drop entries with empty or negative values in given columns on dataframe
         '''
-        col = np.where(data.columns == column)[0][0]
-        to_drop = []
-        for i in range(data.shape[0]):
-            if np.isnan(data.iloc[i, col]) or data.iloc[i, col] < 0:
-                to_drop.append(i)
-        data.drop(data.index[to_drop], inplace=True)
+        for column in columns:
+            to_drop = data[pd.isna(data[column]) | data[column] < 0].index
+            data.drop(to_drop, inplace = True)
     
     # Actual data processing
     def loadChromsAndRsidsFromList(self, file):
@@ -105,11 +102,11 @@ class DataLoader():
         f = open(file, "r")
         line = f.readline()
         while line and len(line) > 0:
-            info = line.split(", ")
+            info = line.split(",")
             chrom = int(info[0])
             interval = info[1].strip()
             if prev_chrom >= 0 and prev_chrom == chrom:
-                interals[idx].append(interval)
+                intervals[idx].append(interval)
             else:
                 idx += 1
                 chroms.append(chrom)
@@ -119,7 +116,8 @@ class DataLoader():
         f.close()
         self.chroms = chroms
         self.intervals = intervals
-    
+
+    # TODO: refactor to work with self.tables
     def getGeneticInformationFromList(self):
         '''
         Uses ukbb_parser to get non-imputed genetic information on stored rsids and chroms
@@ -146,7 +144,7 @@ class DataLoader():
         df["ID_1"] = df.index.astype(int)
         return df
 
-    # TODO: re-implement this to work with self.tables
+    # TODO: refactor to work with self.tables
     def getImputedGeneticInformationFromList(self):
         '''
         Uses bgen.reader to get imputed genetic information on stored rsids and chroms. Save results into separate .csv for each chromosome
@@ -155,7 +153,7 @@ class DataLoader():
         rsids = self.rsids
 
         # TODO: edit this
-        path = os.path.join(self.cwd, "Data", "ukb22828_c1_b0_v3_s487166.csv")
+        path = os.path.join(self.cwd, "Data", "ukb22828_c1_b0_v3_s487159.csv")
         
         df_tmp = pd.read_csv(path, index_col=0)
         for i in range(len(chroms)):
@@ -187,7 +185,8 @@ class DataLoader():
     def getImputedGeneticInformationFromIntervals(
         self, 
         extra = 5000, 
-        export_name = 'imputed_{}.csv',
+        table_name = 'imputed_{}',
+        export = True,
         keep_track_as = 'path'
     ):
         '''
@@ -195,7 +194,8 @@ class DataLoader():
 
         Arguments:
         extra -- number of base pairs subtracted from interval starts and added to interval ends to stretch search intervals
-        export_name -- name format for export file for each chromosome, where {} will be chromosome number. pass empty string for no export
+        table_name -- name format for dataframe for each chromosome, where {} will be chromosome number. will also be used for .csv export file names
+        export -- whether each chromosome dataframe should be exported on their own as well
         keep_track_as ('path', 'table', '') -- how this instance will store each chromosome data in self.tables. pass empty string for no storing.
             note that 'path' option is useless if file isn't being exported.
         '''
@@ -245,25 +245,62 @@ class DataLoader():
             df_tmp = pd.read_csv(self.imputed_ids_path, index_col=0)
             df = pd.DataFrame(rows, index=indices, columns=df_tmp["ID_1"])
             df = df.transpose()
-            if export_name != '':
-                out_file = os.path.join(self.out_folder, export_name.format(chroms[i]))
+            formatted_name = table_name.format(chroms[i])
+            if export:
+                out_file = os.path.join(self.out_folder, formatted_name + '.csv')
                 df.to_csv(out_file)
                 if keep_track_as == 'path':
-                    self.tables.append(out_file)
+                    self.tables[formatted_name] = out_file
             if keep_track_as == 'table':
-                self.tables.append(df)
+                self.tables[formatted_name] = df
 
-    def dominant_model(data):
+    def dominant_model(self, data):
         '''
         Relabel given dataframe's SNP info according to dominant model. Assumes all and only SNP columns start with 'rs'
+
+        Arguments:
+        data -- dataframe to be relabeled. changes are made in place
+        '''
+        snp_pattern = re.compile('rs.*')
+        snp_cols = [col for col in list(data.columns) if snp_pattern.match(col)]
+        for snp in snp_cols:
+            temp = data[snp]
+            data[snp] = [0 if i == 0 else 1 for i in temp]
+
+    def recessive_model(self, data):
+        '''
+        Relabel given dataframe's SNP info according to recessive model. Assumes all and only SNP columns start with 'rs'
+
+        Arguments:
+        data -- dataframe to be relabeled. changes are made in place
+        '''
+        snp_pattern = re.compile('rs.*')
+        snp_cols = [col for col in list(data.columns) if snp_pattern.match(col)]
+        for snp in snp_cols:
+            temp = data[snp]
+            data[snp] = [1 if i == 2 else 0 for i in temp]
+
+    def one_hot_encode(self, data, columns):
+        '''
+        One-hot encode the given columns on the given dataframe. Returns OHC encoded dataframe
+
+        Arguments:
+        data -- dataframe to be modified
+        columns -- features to be one-hot encoded
+
+        Returns:
+        result -- OHC encoded dataframe
+        '''
+        return pd.get_dummies(data, columns = columns, drop_first = True)
         
 
     # TODO: make this general purpose
-    def calcPHQ9(self, binary_cutoff=10):
+    def calcPHQ9(self, table_name, binary_cutoff=10):
         '''
         Uses ukbb_parser to create a PHQ9 dataset with given columns. Stores created dataset in self.tables
     
         Arguments:
+        table_name -- the key with which this table will be stored in self.tables
         binary_cutoff -- used to calculate the PHQ9_binary column, where total PHQ9 scores greater than this cutoff are considered depressed
         '''
         test = [
@@ -315,11 +352,12 @@ class DataLoader():
         fields["ID_1"] = eid
         self.tables.append(fields)
     
-    def make_table(self, columns):
+    def create_table(self, table_name, columns):
         '''
         Uses ukbb_parser to create a dataset with given columns. Stores created dataset in self.tables
     
         Arguments:
+        table_name = the key with which this table will be stored in self.tables
         columns -- list of tuples of the format ('field name', ukbb_field_number, 'data type')
         '''
         eid, fields, _ = create_dataset(
@@ -327,52 +365,109 @@ class DataLoader():
             parse_dataset_covariates_kwargs={"use_genotyping_metadata": False},
         )
         fields["ID_1"] = eid
-        for column, _, _ in columns:
-            self.__drop(fields, column)
-        self.tables.append(fields)
 
-    def import_table(self, table_path, delay_parsing = False):
+        to_drop = []
+        for column, _, _ in columns:
+            to_drop.append(column)
+        # self.__drop(fields, to_drop)
+        self.tables[table_name] = fields
+
+    # TODO: implement properly
+    def create_ICD10_table(self, table_name, columns):
+        '''
+        Uses ukbb_parser to create a dataset with given columns AND ICD10 results. Stores tree and phenotype table in self.tables
+        '''
+        eid, ICD10_tree, fields, _, _ = create_ICD10_dataset(
+            parse_dataset_covariates_kwargs={"use_genotyping_metadata": False}
+        )
+        ICD10_tree.to_csv('/home/mminbay/summer_research/summer23_aylab/data/test.csv')
+        
+
+    def load_table(self, table_name, table_path, delay_parsing = False):
         '''
         Read the .csv file given at table_path and store it at self.tables
 
         Arguments:
+        table_name -- the key with which this table will be stored in self.tables
         table_path -- path to .csv file
         delay_parsing -- if True, save the path instead of dataframe object and only open .csv when in use.
         '''
         if delay_parsing:
-            self.tables.append(table_path)
+            self.tables[table_name] = table_path
         else:
-            self.tables.append(pd.read_csv(table_path))
+            self.tables[table_name] = pd.read_csv(table_path)
 
-    def export(self, on_col = 'ID_1', out = 'export.csv', ohe = []):
+    def get_table(self, table_name):
         '''
-        Merge stored tables on given column and save as .csv at given path. 
+        Return table that is identified with the key 'table_name' in self.tables
 
         Arguments:
-        on_col -- column to merge tables on
-        out -- name of output file
-        ohe -- variables to one-hot encode
+        table_name -- the key with which the table is stored in self.tables
+
+        Returns:
+        table -- the table with the given table_name
         '''
-        if len(self.tables) == 0:
+
+        return self.tables[table_name]
+
+    def merge_all(self, on_col = 'ID_1'):
+        '''
+        Merge all stored dataframes on given column, and return it.
+        '''
+        table_list = list(self.tables.values())
+        if len(table_list) == 0:
             raise Exception('No tables to merge and export')
 
-        final_table = self.tables[0]
-        other_tables = self.tables[1:]
+        final_table = table_list[0]
+        other_tables = table_list[1:]
         for table in other_tables:
             if type(table) == str:
                 table = pd.read_csv(table)
             final_table = final_table.merge(table, on = on_col, how = 'inner')
 
-        for column in list(final_table.columns):
-            self.__drop(final_table, column)
+        self.__drop(final_table, final_table.columns)
+        return final_table
 
-        # TODO: implement one hot encoding!
-        final_table.to_csv(os.path.join(self.out_folder, out))
+    # TODO: refactor to work with only given set of table names
+    def export(self, data, out = 'export.csv', drop = [], ohc = [], model = 'd'):
+        '''
+        Merge stored tables on given column and save as .csv at given path. 
+
+        Arguments:
+        data -- dataframe to export
+        out -- name of output file
+        drop -- list of columns to drop. useful for maintaining a single outcome column per dataframe (check export_all). pass empty string for no drop
+        ohc -- list of variables to one hot encode. pass empty list for no encoding
+        model ('d', 'r') -- d for dominant model, r for recessive model
+        '''
+        
+        if len(drop) > 0:
+            data.drop(columns = drop)
+        if len(ohc) > 0:
+            data = self.one_hot_encode(final_table, ohc)
+
+        if model.equals('d'):
+            self.dominant_model(data)
+        elif model.equals('r'):
+            self.recessive_model(data)
+
+        data.to_csv(os.path.join(self.out_folder, out))
+
+    def export_all(self, ohc, filename = 'result', binary_outcome = 'PHQ9_binary', continuous_outcome = 'PHQ9', model = 'd'):
+        '''
+        Merge all stored dataframes. Export 4 dataframes (OHC, non-OHC) * (binary outcome, continuous outcome)
+        '''
+        final_table = self.merge_all()
+        self.export(final_table, out = filename + '_OHC_binary.csv', drop = [continuous_outcome], ohc = ohc, model = 'd')
+        self.export(final_table, out = filename + '_OHC_continuous.csv', drop = [binary_outcome], ohc = [], model = 'd')
+        self.export(final_table, out = filename + '_noOHC_binary.csv', drop = [continuous_outcome], ohc = [], model = 'd')
+        self.export(final_table, out = filename + '_noOHC_continuous.csv', drop = [binary_outcome], ohc = ohc, model = 'd')
 
 '''
 Below is an example usage
 '''
 
+# OUTDATED! REDO
 # def main():
 #     dl = DataLoader(
 #         genetics_folder = '/shared/datalake/summer23Ay/data1/ukb_genetic_data',
@@ -390,9 +485,9 @@ Below is an example usage
 #         ("Sleeplessness/Insomnia", 1200, "continuous"),
 #     ] # an example phenotype dataset
 
-#     dl.make_table(clinical_factors) # make dataset
+#     dl.make_table('clinical factors', clinical_factors) # make dataset
 
-#     dl.calcPHQ9(binary_cutoff = 10) # make PHQ9 dataset
+#     dl.calcPHQ9('PHQ9 scores', binary_cutoff = 10) # make PHQ9 dataset
 
 #     dl.getImputedGeneticInformationFromIntervals(
 #         extra = 5000, 
