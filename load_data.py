@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from ukbb_parser import create_dataset, get_chrom_raw_marker_data
 from bgen.reader import BgenFile as bf
+import re
 
 '''
 This class is meant to be used as a way to compile your genetic/phenotype/etc. data into a single .csv 
@@ -251,6 +252,11 @@ class DataLoader():
                     self.tables.append(out_file)
             if keep_track_as == 'table':
                 self.tables.append(df)
+
+    def dominant_model(data):
+        '''
+        Relabel given dataframe's SNP info according to dominant model. Assumes all and only SNP columns start with 'rs'
+        
 
     # TODO: make this general purpose
     def calcPHQ9(self, binary_cutoff=10):
