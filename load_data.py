@@ -15,7 +15,7 @@ class DataLoader():
     def __init__(
         self,
         genetics_folder = '/path/to/genetics/',
-        genetics_format = 'ukb22438_c{}_b0_v2.bgen',
+        genetics_format = 'ukb22828_c{}_b0_v2.bgen',
         imputed_ids_path = '/path/to/imputed/ids.csv',
         out_folder = '/path/to/out_folder/'
     ):
@@ -209,38 +209,54 @@ class DataLoader():
 
         for i in range(len(chroms)):
             current_chrom = chroms[i]
+            print('Checking chromosome ' + str(current_chrom))
             bfile = bf(os.path.join(self.genetics_folder, self.genetics_format.format(str(current_chrom))))
             
             positions = bfile.positions()
             rsids = bfile.rsids()
             
             current_intervals = intervals[i] # the intervals we need to check for this chromosome
-
-            z = 0 # to keep track of current interval
-            current_interval = current_intervals[z]
-            interval_start = int(current_interval.split('-')[0]) - extra
-            interval_end = int(current_interval.split('-')[1]) + extra
-            
+            # dumb implementation:
             for k in range(len(positions)):
                 current_position = positions[k]
-                # if this position is later than current interval, try next intervals
-                while current_position > interval_end:
-                    z += 1
-                    # if no intervals left to check on this chromosome, stop checking
-                    if z >= len(current_intervals):
-                        break
-                    current_interval = current_intervals[z]
+                for j in range(len(current_intervals)):
+                    current_interval = current_intervals[j]
                     interval_start = int(current_interval.split('-')[0]) - extra
                     interval_end = int(current_interval.split('-')[1]) + extra
-                # if this position is earlier than current interval, check the next position
-                if current_position < interval_start:
-                    continue
-                # if position isn't earlier or later, it must be within this interval
-                if current_position >= interval_start and current_position <= interval_end:
-                    variant = rsids[k]
-                    indices.append(variant)
-                    probabilities = bfile[k].probabilities
-                    rows.append(probabilities.argmax(axis=1))
+                    if (current_position >= interval_start) and (current_position <= interval_end):
+                        variant = rsids[k]
+                        indices.append(variant)
+                        probabilities = bfile[k].probabilities
+                        rows.append(probabilities.argmax(axis=1))
+                        break
+                    
+            
+            # smart implementation: revise later
+            # z = 0 # to keep track of current interval
+            # current_interval = current_intervals[z]
+            # interval_start = int(current_interval.split('-')[0]) - extra
+            # interval_end = int(current_interval.split('-')[1]) + extra
+            
+            # for k in range(len(positions)):
+            #     current_position = positions[k]
+            #     # if this position is later than current interval, try next intervals
+            #     while current_position > interval_end:
+            #         z += 1
+            #         # if no intervals left to check on this chromosome, stop checking
+            #         if z >= len(current_intervals):
+            #             break
+            #         current_interval = current_intervals[z]
+            #         interval_start = int(current_interval.split('-')[0]) - extra
+            #         interval_end = int(current_interval.split('-')[1]) + extra
+            #     # if this position is earlier than current interval, check the next position
+            #     if current_position < interval_start:
+            #         continue
+            #     # if position isn't earlier or later, it must be within this interval
+            #     if (current_position >= interval_start) and (current_position <= interval_end):
+            #         variant = rsids[k]
+            #         indices.append(variant)
+            #         probabilities = bfile[k].probabilities
+            #         rows.append(probabilities.argmax(axis=1))
             
             df_tmp = pd.read_csv(self.imputed_ids_path, index_col=0)
             df = pd.DataFrame(rows, index=indices, columns=df_tmp["ID_1"])
@@ -350,7 +366,7 @@ class DataLoader():
         fields["PHQ9"] = rows_score
         fields["PHQ9_binary"] = rows_binary
         fields["ID_1"] = eid
-        self.tables.append(fields)
+        self.tables[table_name] = fields
     
     def create_table(self, table_name, columns):
         '''
