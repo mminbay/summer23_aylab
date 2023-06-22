@@ -85,6 +85,20 @@ class DataLoader():
         self.chroms = chroms
         self.rsids = rsids
 
+    def loadOnlyRsids(self, file):
+        '''
+        This sucks
+        '''
+        rsids = []
+        f = open(file, 'r')
+        line = f.readline()
+        while line and len(line) > 0:
+            rsids.append(line.replace('\"', ''))
+            print(line)
+            line = f.readline()
+        f.close()
+        self.rsids = rsids
+
     def loadChromsAndRsidsFromInterval(self, file):
         '''
         Reads given .txt file and stores list of chroms and intervals as instance variables
@@ -145,30 +159,30 @@ class DataLoader():
         return df
 
     # TODO: refactor to work with self.tables
-    def getImputedGeneticInformationFromList(self):
+    def getImputedGeneticInformationFromList(self, **kwargs):
         '''
         Uses bgen.reader to get imputed genetic information on stored rsids and chroms. Save results into separate .csv for each chromosome
         '''
-        chroms = self.chroms
+        if hasattr(self, 'chroms'):
+            chroms = self.chroms
+        else:
+            chroms = kwargs['chroms']
         rsids = self.rsids
-
-        # TODO: edit this
-        path = os.path.join(self.cwd, "Data", "ukb22828_c1_b0_v3_s487159.csv")
         
-        df_tmp = pd.read_csv(path, index_col=0)
+        df_tmp = pd.read_csv(self.imputed_ids_path, index_col=0)
         for i in range(len(chroms)):
+            current_chrom = chroms[i]
             rows = []
             index = []
             # bgen file should be placed here
-            bgenPath = os.path.join(
-                self.cwd,
-                "Data/genetics/EGAD00010001226/001/",
-                "ukb22828_c{}_b0_v3.bgen".format(chroms[i]),
-            )
+            bgenPath = os.path.join(self.genetics_folder, self.genetics_format.format(str(current_chrom)))
             bfile = bf(bgenPath)
             map = {rsid: index for index, rsid in enumerate(bfile.rsids())}
-            for j in range(len(rsids[i])):
-                rsid = rsids[i][j]
+            print(map.keys())
+            for j in range(len(rsids)):
+            #for j in range(len(rsids[i])):
+                rsid = rsids[j]
+                #rsid = rsids[i][j]
                 if rsid in map.keys():
                     index.append(rsid)
                     idx = map[rsid]
@@ -179,7 +193,7 @@ class DataLoader():
             df = pd.DataFrame(rows, index=index, columns=df_tmp["ID_1"])
             df = df.transpose()
             df["ID_1"] = df.index.astype(int)
-            outFile = os.path.join(self.cwd, "Data", "imputed_{}.csv".format(chroms[i]))
+            outFile = os.path.join(self.out_folder,  'imputed_{}.csv'.format(str(current_chrom)))
             df.to_csv(outFile)
 
     def getImputedGeneticInformationFromIntervals(
@@ -209,55 +223,24 @@ class DataLoader():
 
         for i in range(len(chroms)):
             current_chrom = chroms[i]
-            print('Checking chromosome ' + str(current_chrom))
-            bfile = bf(os.path.join(self.genetics_folder, self.genetics_format.format(str(current_chrom))))
-            
-            positions = bfile.positions()
-            rsids = bfile.rsids()
-            
+            if current_chrom in [1, 2]:
+                continue
             current_intervals = intervals[i] # the intervals we need to check for this chromosome
-            # dumb implementation:
-            for k in range(len(positions)):
-                current_position = positions[k]
+            
+            print('Checking chromosome {} with delay parsing...'.format(str(current_chrom)))
+            bfile = bf(os.path.join(self.genetics_folder, self.genetics_format.format(str(current_chrom))), delay_parsing = True)
+            for var in bfile:
+                position = var.pos
                 for j in range(len(current_intervals)):
                     current_interval = current_intervals[j]
                     interval_start = int(current_interval.split('-')[0]) - extra
                     interval_end = int(current_interval.split('-')[1]) + extra
-                    if (current_position >= interval_start) and (current_position <= interval_end):
-                        variant = rsids[k]
+                    if (position >= interval_start) and (position <= interval_end):
+                        variant = var.rsid
                         indices.append(variant)
-                        probabilities = bfile[k].probabilities
+                        probabilities = var.probabilities
                         rows.append(probabilities.argmax(axis=1))
                         break
-                    
-            
-            # smart implementation: revise later
-            # z = 0 # to keep track of current interval
-            # current_interval = current_intervals[z]
-            # interval_start = int(current_interval.split('-')[0]) - extra
-            # interval_end = int(current_interval.split('-')[1]) + extra
-            
-            # for k in range(len(positions)):
-            #     current_position = positions[k]
-            #     # if this position is later than current interval, try next intervals
-            #     while current_position > interval_end:
-            #         z += 1
-            #         # if no intervals left to check on this chromosome, stop checking
-            #         if z >= len(current_intervals):
-            #             break
-            #         current_interval = current_intervals[z]
-            #         interval_start = int(current_interval.split('-')[0]) - extra
-            #         interval_end = int(current_interval.split('-')[1]) + extra
-            #     # if this position is earlier than current interval, check the next position
-            #     if current_position < interval_start:
-            #         continue
-            #     # if position isn't earlier or later, it must be within this interval
-            #     if (current_position >= interval_start) and (current_position <= interval_end):
-            #         variant = rsids[k]
-            #         indices.append(variant)
-            #         probabilities = bfile[k].probabilities
-            #         rows.append(probabilities.argmax(axis=1))
-            
             df_tmp = pd.read_csv(self.imputed_ids_path, index_col=0)
             df = pd.DataFrame(rows, index=indices, columns=df_tmp["ID_1"])
             df = df.transpose()
@@ -269,6 +252,73 @@ class DataLoader():
                     self.tables[formatted_name] = out_file
             if keep_track_as == 'table':
                 self.tables[formatted_name] = df
+
+        # the following approach doesn't work with delay_parsing = True
+        # for i in range(len(chroms)):
+        #     current_chrom = chroms[i]
+        #     # REMOVE THIS
+        #     if current_chrom == 1:
+        #         continue
+        #     print('Checking chromosome ' + str(current_chrom))
+        #     bfile = bf(os.path.join(self.genetics_folder, self.genetics_format.format(str(current_chrom))), delay_parsing = True)
+            
+        #     positions = bfile.positions()
+        #     rsids = bfile.rsids()
+            
+        #     current_intervals = intervals[i] # the intervals we need to check for this chromosome
+        #     dumb implementation:
+        #     for k in range(len(positions)):
+        #         current_position = positions[k]
+        #         for j in range(len(current_intervals)):
+        #             current_interval = current_intervals[j]
+        #             interval_start = int(current_interval.split('-')[0]) - extra
+        #             interval_end = int(current_interval.split('-')[1]) + extra
+        #             if (current_position >= interval_start) and (current_position <= interval_end):
+        #                 variant = rsids[k]
+        #                 indices.append(variant)
+        #                 probabilities = bfile[k].probabilities
+        #                 rows.append(probabilities.argmax(axis=1))
+        #                 break
+                    
+            
+        #     smart implementation: revise later
+        #     z = 0 # to keep track of current interval
+        #     current_interval = current_intervals[z]
+        #     interval_start = int(current_interval.split('-')[0]) - extra
+        #     interval_end = int(current_interval.split('-')[1]) + extra
+            
+        #     for k in range(len(positions)):
+        #         current_position = positions[k]
+        #         # if this position is later than current interval, try next intervals
+        #         while current_position > interval_end:
+        #             z += 1
+        #             # if no intervals left to check on this chromosome, stop checking
+        #             if z >= len(current_intervals):
+        #                 break
+        #             current_interval = current_intervals[z]
+        #             interval_start = int(current_interval.split('-')[0]) - extra
+        #             interval_end = int(current_interval.split('-')[1]) + extra
+        #         # if this position is earlier than current interval, check the next position
+        #         if current_position < interval_start:
+        #             continue
+        #         # if position isn't earlier or later, it must be within this interval
+        #         if (current_position >= interval_start) and (current_position <= interval_end):
+        #             variant = rsids[k]
+        #             indices.append(variant)
+        #             probabilities = bfile[k].probabilities
+        #             rows.append(probabilities.argmax(axis=1))
+            
+        #     df_tmp = pd.read_csv(self.imputed_ids_path, index_col=0)
+        #     df = pd.DataFrame(rows, index=indices, columns=df_tmp["ID_1"])
+        #     df = df.transpose()
+        #     formatted_name = table_name.format(chroms[i])
+        #     if export:
+        #         out_file = os.path.join(self.out_folder, formatted_name + '.csv')
+        #         df.to_csv(out_file)
+        #         if keep_track_as == 'path':
+        #             self.tables[formatted_name] = out_file
+        #     if keep_track_as == 'table':
+        #         self.tables[formatted_name] = df
 
     def dominant_model(self, data):
         '''
