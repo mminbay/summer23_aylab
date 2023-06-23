@@ -15,7 +15,7 @@ class DataLoader():
     def __init__(
         self,
         genetics_folder = '/path/to/genetics/',
-        genetics_format = 'ukb22828_c{}_b0_v2.bgen',
+        genetics_format = 'ukb22828_c{}_b0_v3.bgen',
         imputed_ids_path = '/path/to/imputed/ids.csv',
         out_folder = '/path/to/out_folder/'
     ):
@@ -85,20 +85,6 @@ class DataLoader():
         self.chroms = chroms
         self.rsids = rsids
 
-    def loadOnlyRsids(self, file):
-        '''
-        This sucks
-        '''
-        rsids = []
-        f = open(file, 'r')
-        line = f.readline()
-        while line and len(line) > 0:
-            rsids.append(line.replace('\"', ''))
-            print(line)
-            line = f.readline()
-        f.close()
-        self.rsids = rsids
-
     def loadChromsAndRsidsFromInterval(self, file):
         '''
         Reads given .txt file and stores list of chroms and intervals as instance variables
@@ -159,14 +145,11 @@ class DataLoader():
         return df
 
     # TODO: refactor to work with self.tables
-    def getImputedGeneticInformationFromList(self, **kwargs):
+    def getImputedGeneticInformationFromList(self):
         '''
         Uses bgen.reader to get imputed genetic information on stored rsids and chroms. Save results into separate .csv for each chromosome
         '''
-        if hasattr(self, 'chroms'):
-            chroms = self.chroms
-        else:
-            chroms = kwargs['chroms']
+        chroms = self.chroms
         rsids = self.rsids
         
         df_tmp = pd.read_csv(self.imputed_ids_path, index_col=0)
@@ -178,11 +161,8 @@ class DataLoader():
             bgenPath = os.path.join(self.genetics_folder, self.genetics_format.format(str(current_chrom)))
             bfile = bf(bgenPath)
             map = {rsid: index for index, rsid in enumerate(bfile.rsids())}
-            print(map.keys())
-            for j in range(len(rsids)):
-            #for j in range(len(rsids[i])):
-                rsid = rsids[j]
-                #rsid = rsids[i][j]
+            for j in range(len(rsids[i])):
+                rsid = rsids[i][j]
                 if rsid in map.keys():
                     index.append(rsid)
                     idx = map[rsid]
@@ -195,6 +175,86 @@ class DataLoader():
             df["ID_1"] = df.index.astype(int)
             outFile = os.path.join(self.out_folder,  'imputed_{}.csv'.format(str(current_chrom)))
             df.to_csv(outFile)
+
+    def get_imputed_from_intervals_for_ids(
+        self, 
+        data,
+        extra = 6000,
+        table_name = 'imputed_{}',
+        export = True,
+        keep_track_as = 'path'
+    ):
+        '''
+        Uses bgen.reader to get imputed genetic information on stored rsids and chroms only for the ID_1s on given dataframe.
+        Saves results into separate .csv for each chromosome.
+
+        Arguments:
+            data -- path to .csv file containing the ID_1's to use
+            extra -- number of base pairs subtracted from interval starts and added to interval ends to stretch search intervals
+            table_name -- name format for dataframe for each chromosome, where {} will be chromosome number. will also be used for .csv export file names
+            export -- whether each chromosome dataframe should be exported on their own as well
+            keep_track_as ('path', 'table', '') -- how this instance will store each chromosome data in self.tables. pass empty string for no storing.
+                note that 'path' option is useless if file isn't being exported.
+        '''
+        ids_to_keep = pd.read_csv(data, usecols = ['ID_1'])['ID_1'].tolist()
+        all_ids = pd.read_csv(self.imputed_ids_path, usecols = ['ID_1'])['ID_1'].tolist()
+
+        # create list of kept ids in order 
+        ordered_kept_ids = [eid for eid in all_ids if eid in ids_to_keep]
+        
+        chroms = self.chroms
+        rsids = self.rsids
+
+        rows = []
+        indices = []
+
+        for i in range(len(chroms)):
+            current_chrom = chroms[i]
+            current_intervals = intervals[i]
+
+            bfile = bf(os.path.join(self.genetics_folder, self.genetics_format.format(str(current_chrom))), delay_parsing = True)
+
+            z = 0
+            current_interval = current_intervals[z]
+            interval_start = int(current_interval.split('-')[0]) - extra
+            interval_end = int(current_interval.split('-')[1]) + extra
+
+            for var in bfile:
+                current_position = var.pos
+                no_intervals_left = False
+                while current_position > interval_end:
+                    z += 1
+                    if z >= len(current_intervals):
+                        no_intervals_left = True
+                        break
+                    current_interval = current_intervals[z]
+                    interval_start = int(current_interval.split('-')[0]) - extra
+                    interval_end = int(current_interval.split('-')[1]) + extra
+                if no_intervals_left:
+                    break
+                if current_position < interval_start:
+                    continue
+                if (current_position >= interval_start) and (current_position <= interval_end):
+                    variant = var.rsid
+                    indices.append(variant)
+                    probabilities = var.probabilities
+                    if len(probabilities) != len(all_ids):
+                        raise Exception('List of ids should match probabilities')
+                    row = []
+                    for j in range(len(probabilities)):
+                        if all_ids[j] in ordered_kept_ids:
+                            row.append(probabilities[j].argmax())
+                    rows.append(row)
+            df = pd.DataFrame(rows, index = indices, columns = ordered_kept_ids)
+            df = df.transpose()
+            formatted_name = table_name.format(chroms[i])
+            if export:
+                out_file = os.path.join(self.out_folder, formatted_name + '.csv')
+                df.to_csv(out_file)
+                if keep_track_as == 'path':
+                    self.tables[formatted_name] = out_file
+            if keep_track_as == 'table':
+                self.tables[formatted_name] = df
 
     def getImputedGeneticInformationFromIntervals(
         self, 
@@ -223,8 +283,6 @@ class DataLoader():
 
         for i in range(len(chroms)):
             current_chrom = chroms[i]
-            if current_chrom in [1, 2]:
-                continue
             current_intervals = intervals[i] # the intervals we need to check for this chromosome
             
             print('Checking chromosome {} with delay parsing...'.format(str(current_chrom)))
@@ -417,6 +475,30 @@ class DataLoader():
         fields["PHQ9_binary"] = rows_binary
         fields["ID_1"] = eid
         self.tables[table_name] = fields
+        
+    def create_41270_table(self, table_name, values, export = True):
+        '''
+        Uses ukbb_parser to find participant ID's which have any of given codings on their 41270 field.
+        This dataframe will only have 1 column 'ID_1'.
+
+        Arguments:
+            table_name -- the key with which this table will be stored in self.tables
+            values -- list of values that will be looked for in the 41270 fields. a participant's outcome will be 
+                labeled 1 if they have any of these values, 0 otherwise
+            export -- whether the resulting dataframes should be exported on their own
+        '''
+        eid, fields, _ = create_dataset(
+            [('41270 fields', 41270, 'raw')],
+            parse_dataset_covariates_kwargs={"use_genotyping_metadata": False},
+        )
+        columns = fields.columns.tolist()
+        fields['ID_1'] = eid
+        fields.to_csv(os.path.join(self.out_folder, table_name + '.csv'))
+
+        result = fields[(fields.isin(values)).any(axis = 1)]
+        result.drop(columns = columns)
+        result.to_csv(os.path.join(self.out_folder, table_name + '_depressed_only.csv'))
+        self.tables[table_name]
     
     def create_table(self, table_name, columns):
         '''
