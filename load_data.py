@@ -54,7 +54,7 @@ class DataLoader():
             data.drop(to_drop, inplace = True)
     
     # Actual data processing
-    def loadChromsAndRsidsFromList(self, file):
+    def load_chroms_and_rsids(self, file):
         '''
         Reads given .txt file and stores list of chroms and rsids as instance variables
         
@@ -85,7 +85,7 @@ class DataLoader():
         self.chroms = chroms
         self.rsids = rsids
 
-    def loadChromsAndRsidsFromInterval(self, file):
+    def load_chroms_and_intervals(self, file):
         '''
         Reads given .txt file and stores list of chroms and intervals as instance variables
         
@@ -118,7 +118,7 @@ class DataLoader():
         self.intervals = intervals
 
     # TODO: refactor to work with self.tables
-    def getGeneticInformationFromList(self):
+    def get_nonimputed_from_rsids(self):
         '''
         Uses ukbb_parser to get non-imputed genetic information on stored rsids and chroms
     
@@ -145,7 +145,7 @@ class DataLoader():
         return df
 
     # TODO: refactor to work with self.tables
-    def getImputedGeneticInformationFromList(self):
+    def get_imputed_from_rsids(self):
         '''
         Uses bgen.reader to get imputed genetic information on stored rsids and chroms. Save results into separate .csv for each chromosome
         '''
@@ -182,7 +182,9 @@ class DataLoader():
         extra = 6000,
         table_name = 'imputed_{}',
         export = True,
-        keep_track_as = 'path'
+        keep_track_as = 'path',
+        use_list = False,
+        get_alleles = False
     ):
         '''
         Uses bgen.reader to get imputed genetic information on stored rsids and chroms only for the ID_1s on given dataframe.
@@ -194,7 +196,10 @@ class DataLoader():
             table_name -- name format for dataframe for each chromosome, where {} will be chromosome number. will also be used for .csv export file names
             export -- whether each chromosome dataframe should be exported on their own as well
             keep_track_as ('path', 'table', '') -- how this instance will store each chromosome data in self.tables. pass empty string for no storing.
-                note that 'path' option is useless if file isn't being exported.
+                note that 'path' option is useless if file isn't being exported. don't do table if you are doing multiple chromosomes
+            use_list -- if True, only get information on rsids that have been provided. you need to call both load_chroms_and_rsids AND load_chroms_and_intervals
+                for this to work properly, and both sources should obviously have the same chromosomes.
+            get_alleles -- if True, will output an additional .csv file that contains the allele information for all snps that have been recorded
         '''
         ids_to_keep = pd.read_csv(data, usecols = ['ID_1'])['ID_1'].tolist()
         all_ids = pd.read_csv(self.imputed_ids_path, usecols = ['ID_1'])['ID_1'].tolist()
@@ -203,14 +208,24 @@ class DataLoader():
         ordered_kept_ids = [eid for eid in all_ids if eid in ids_to_keep]
         
         chroms = self.chroms
-        rsids = self.rsids
+        intervals = self.intervals
+
+        if use_list:
+            rsids = self.rsids
 
         rows = []
         indices = []
 
+        if get_alleles:
+            alleles = []
+            minor_alleles = []
+
         for i in range(len(chroms)):
             current_chrom = chroms[i]
             current_intervals = intervals[i]
+
+            if use_list:
+                current_rsids = rsids[i]
 
             bfile = bf(os.path.join(self.genetics_folder, self.genetics_format.format(str(current_chrom))), delay_parsing = True)
 
@@ -236,6 +251,9 @@ class DataLoader():
                     continue
                 if (current_position >= interval_start) and (current_position <= interval_end):
                     variant = var.rsid
+                    if use_list:
+                        if variant not in current_rsids:
+                            continue
                     indices.append(variant)
                     probabilities = var.probabilities
                     if len(probabilities) != len(all_ids):
@@ -245,12 +263,24 @@ class DataLoader():
                         if all_ids[j] in ordered_kept_ids:
                             row.append(probabilities[j].argmax())
                     rows.append(row)
+
+                    if get_alleles:
+                        alleles.append(str(var.alleles))
+                        minor_alleles.append(var.minor_allele)
+
             df = pd.DataFrame(rows, index = indices, columns = ordered_kept_ids)
             df = df.transpose()
             formatted_name = table_name.format(chroms[i])
             if export:
                 out_file = os.path.join(self.out_folder, formatted_name + '.csv')
                 df.to_csv(out_file)
+                if get_alleles:
+                    df_allele = pd.DataFrame()
+                    df_allele['SNP'] = indices
+                    df_allele['alleles'] = alleles
+                    df_allele['minor_allele'] = minor_alleles
+                    out_file_allele = os.path.join(self.out_folder, formatted_name + '_alleles.csv')
+                    df_allele.to_csv(out_file_allele)
                 if keep_track_as == 'path':
                     self.tables[formatted_name] = out_file
             if keep_track_as == 'table':
@@ -567,6 +597,8 @@ class DataLoader():
             raise Exception('No tables to merge and export')
 
         final_table = table_list[0]
+        if type(final_table) == str:
+            final_table = pd.read_csv(final_table)
         other_tables = table_list[1:]
         for table in other_tables:
             if type(table) == str:

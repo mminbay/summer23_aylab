@@ -68,11 +68,24 @@ The `ukbb_parser` module assumes the existence of a `.ukbb_paths.py` file at **t
 
 ### Accessing UKBB Genetic Data – Cluster
 
-***TODO: IMPLEMENT THIS PART***
+At the time of writing this, all genetic data files from UKB are stored at `/datalake/AyLab/data1/ukb_genetic_data/`. As a brief overview:  
+* 22828 files with `.bgen` extension are imputed data for their respective chromosome. These rarely change and you should be able to use them for your study
+* 22828 files with `.sample` extension are link files that contain the participants' ID's in the same order the participants appear in the `.bgen` files. Note that the `util` folder in this repository has a `translate_sample.py` file, which converts these files into `.csv` files. These files **can change** from time to time depending on withdrawn participants: withdrawn participants' ID's will be replaced with negative integers, but the order will be maintained across versions.
+* 22438 files are haplotype files: God help you if you decide to figure out what those mean.
+* 22418 files with `.bed` extension are non-imputed data for their respective chromosome. Again, these rarely change.
+* 22418 files with `.fam` extension are link files, similar to the 22828 `.sample` files.
+* `.bim` files I have no idea about: feel free to ask your *bio kid*.
 
-### Accessing Genetic UKBB Data – Personal Device (NOT RECOMMENDED)
+### Downloading UKBB Genetic Data
 
-***TODO: IMPLEMENT THIS PART***
+I hope you never have to do this since the genetic data files are quite large (200 GB for imputed data on chromosome 2, for example). But if you do, refer to https://biobank.ctsu.ox.ac.uk/crystal/label.cgi?id=263 for data fields.  
+
+You will need `gfetch` to download files as described in the above resource. 
+```
+$ cd /whichever/directory/you/will/call/gfetch/from/
+$ wget  -nd  biobank.ndph.ox.ac.uk/ukb/util/gfetch
+```
+
 
 ### Configuring `.env`  
 Since you might want to organize your `data` folder as you wish, there is a `.env.example` provided in this repository. Set the environment variables as appropriate and rename the file to `.env` to make it usable.
