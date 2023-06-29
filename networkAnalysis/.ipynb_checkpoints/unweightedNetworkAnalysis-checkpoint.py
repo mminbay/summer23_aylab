@@ -365,8 +365,7 @@ def get_similar_pairs(similarity_matrix, threshold):
 
     
 # prints the nodes with similarity scores higher than the threshold given. have to pass metric and threshold 
-def print_high_similarity(G, metric_name, similarity_matrix, similarity_threshold, KatzIndex=None):   
-    print(metric_name, similarity_matrix)
+def print_high_similarity(G, metric_name, similarity_matrix, similarity_threshold, KatzIndex=None, print_all=True):   
     for i in range(1,nx.number_of_nodes(G)): # graph indexing is from 1 and not 0
         for j in range(1,nx.number_of_nodes(G)):
             if metric_name == 'cosine':
@@ -375,15 +374,19 @@ def print_high_similarity(G, metric_name, similarity_matrix, similarity_threshol
                 similarity_matrix[i][j] = jaccard(list(G.neighbors(i)), list(G.neighbors(j)))
             elif metric_name == 'katz':
                 similarity_matrix[i][j] = KatzIndex.run(i, j)
-    print(metric_name, similarity_matrix)
     similar_pairs = get_similar_pairs(similarity_matrix, similarity_threshold)
-    if len(similar_pairs) == 0:
+    num_sim_pairs = sum(1 for pair in similar_pairs if pair[0] != pair[1])
+    if num_sim_pairs == 0:
         print(f"No pairs of nodes have a {metric_name} similarity score higher than {similarity_threshold}.")
     else:
-        print(f"Pairs of nodes with a {metric_name} similarity score higher than {similarity_threshold}:")
+        print(f"{num_sim_pairs} Pairs of nodes, excluding same nodes, have a {metric_name} similarity score higher than {similarity_threshold}:")
         # uncomment the lines below to print all the nodes with scores higher than threshold
-        # for pair in similar_pairs:
-        #     print(f"Nodes {pair[0]} and {pair[1]}, score is: {similarity_matrix[pair[0]][pair[1]]} \n")
+        if print_all:
+            for pair in similar_pairs:
+                if (pair[0] == pair[1]):
+                    pass
+                else:
+                    print(f"Nodes {pair[0]} and {pair[1]}, score is: {similarity_matrix[pair[0]][pair[1]]} \n")
 
 
 # GRAPH MAKING AND NETWORK ANALYSIS FUNCTIONS
@@ -486,10 +489,21 @@ def CFINDER_communities(G, k=3, path=None):
         None
     """
     cliques = list(k_clique_communities(G, k))
+    for i, clique in enumerate(cliques, start=1):
+        print(f"{k}-Clique Community {i}: {clique}")
+    print('\n')
     if path is not None:
-        visualize_communities(G, cliques)
+        visualize_communities(G, cliques, path=path)
     else:
-        visualize_communities(G, cliques, path = path)
+        visualize_communities(G, cliques)
+
+# k = 3
+#     cliques = list(k_clique_communities(G, k)) # finds 3-clique communities, change the 3 to find bigger-clique communities
+#     for i, clique in enumerate(cliques, start=1):
+#         print(f"{k}-Clique Community {i}: {clique}")
+#     print('\n')
+#     path = '../data/networkAnalysisData/k-cliqueCommunities.png'
+#     visualize_communities(G, cliques, path=path) # Plots the k-clique communities, the plt.savefig() line may be commented out, check the visualize_communities() function above
 
 
 def print_similarity(G, similarity_metric, similarity_threshold=0.5, print_all_pairs=False):
@@ -516,14 +530,14 @@ def print_similarity(G, similarity_metric, similarity_threshold=0.5, print_all_p
     """
     if similarity_metric == 'cosine':
         A_Cosine = np.zeros((nx.number_of_nodes(G), nx.number_of_nodes(G)))
-        print_high_similarity(G, 'cosine', A_Cosine, similarity_threshold)
+        print_high_similarity(G, 'cosine', A_Cosine, similarity_threshold, print_all=print_all_pairs)
         ''' the print statement below prints the similarity scores for all pairs, similar print statements are commented out for jaccard and katz below
             it abridges the result in the terminal though '''
         if print_all_pairs:
             print("Cosine similarity matrix for each pair of nodes: ", A_Cosine, '\n')
     elif similarity_metric == 'jaccard':
         A_Jaccard = np.zeros((nx.number_of_nodes(G), nx.number_of_nodes(G)))
-        print_high_similarity(G, 'jaccard', A_Jaccard, similarity_threshold)
+        print_high_similarity(G, 'jaccard', A_Jaccard, similarity_threshold, print_all=print_all_pairs)
         if print_all_pairs:
             print("Jaccard similarity matrix for each pair of nodes: ", A_Jaccard, '\n')
     elif similarity_metric == 'katz':
@@ -532,7 +546,7 @@ def print_similarity(G, similarity_metric, similarity_threshold=0.5, print_all_p
         GNK, KatzIndex = calculate_katz_similarity(G, beta, alpha) #GNK is the networkit graph, katzindex is used to calculate katz similarity scores
         
         A_Katz = np.zeros((nx.number_of_nodes(G), nx.number_of_nodes(G)))
-        print_high_similarity(G, 'katz', A_Katz, similarity_threshold, KatzIndex)
+        print_high_similarity(G, 'katz', A_Katz, similarity_threshold, KatzIndex, print_all=print_all_pairs)
         if print_all_pairs:
             print("Katz similarity matrix for each pair of nodes: ", A_Katz, '\n') 
     else:

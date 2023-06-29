@@ -99,7 +99,7 @@ You may need the following functions for network analysis:
     print_similarity(G, similarity_metric, similarity_threshold=0.5, print_all_pairs=False)
     Args: 
         G (nx.Graph): The input graph.
-        similarity_metric (str): The similarity metric to use. Possible values are 'cosine', 'jaccard', and 'katz'.
+        similarity_metric (str): The similarity metric to use. Possible values are amongst ['cosine', 'jaccard', 'katz'].
         similarity_threshold (float, optional): The threshold value for considering a similarity score as high. Default is 0.5.
         print_all_pairs (bool, optional): Whether to print the similarity scores for all pairs of nodes. Default is False.
  4. 
@@ -117,6 +117,10 @@ You may need the following functions for network analysis:
 # example code provided
 import unweightedNetworkAnalysis as unet
 
+## metrics for quick use:
+centrality_metrics = ['degree', 'harmonic', 'node_betweenness', 'edge_betweenness', 'pagerank']
+similarity_metrics = ['cosine', 'jaccard', 'katz']
+
 # making Graph
 edges_file_path = '../data/networkAnalysisData/randomNetworkAnalysisData_edges.csv'
 source_col = 'SNP1'
@@ -125,18 +129,29 @@ target_col = 'SNP2'
 G = unet.make_graph_from_edges(edges_file_path, source_col, target_col) # makes the graph
 
 plot_path = '../data/networkAnalysisData/circularNetwork.png'
-unet.plot_graph(G, plot_path)
+# unet.plot_graph(G, plot_path)
 
 unet.print_graph_info(G, bool_print=True)
 
-# running network analyses
-centrality_metrics = ['degree', 'harmonic', 'node_betweenness', 'edge_betweenness', 'pagerank']
 
+# running network analyses
 for metric in centrality_metrics:
     unet.print_centrality(G, metric, highest_only=True)
 
-communities_path = '../data/networkAnalysisData/k-cliqueCommunities.png'
-unet.CFINDER_communities(G, k=4, path=communities_path)
+    
+# communities analyses:
+# communities_path = '../data/networkAnalysisData/k-cliqueCommunities.png'
+# unet.CFINDER_communities(G, k=4, path=communities_path)
+
+# similarity analyses
+for metric in similarity_metrics:
+    unet.print_similarity(G, metric, similarity_threshold=0.5, print_all_pairs=True)
+
+
+# degree distribution
+deg_histogram_path = '../data/networkAnalysisData/degree_distribution_histogram.png' # path to save degree distribution histogram
+deg_curve_path = '../data/networkAnalysisData/degree_distribution_curve.png' # path to save degree distribution curve
+unet.plot_degree_distribution(G, curve=False, print_degree_info=True, path=deg_histogram_path, log_scale=False)
 
 
 
