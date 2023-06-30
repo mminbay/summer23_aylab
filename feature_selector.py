@@ -285,31 +285,37 @@ class FeatureSelector():
                 and every selector will be applied equal times. you can repeat selectors in list to manipulate this
             selector_names -- list of function names that will be used to name subdirectories.
             out_name -- name of subdirectories and compiled results file that will be created
-        '''
-        selector_len = len(selectors)
-        if n % len(selectors) != 0:
-            raise Exception('Selectors must evenly divide the number of bootstraps')
-            
-        if selector_len != len(selector_names):
+        ''' 
+        if len(selectors) != len(selector_names):
             raise Exception('Selector list must be as long as selector name list')
 
         bootstraps = self.bootstrap(n, k, target_column, target_outcome)
-        each_selector = int(n / selector_len)
         filenames = []
-        
-        for i in range(selector_len):
-            function = selectors[i]
-            selector_folder = os.path.join(self.out_folder, out_name + '_' + selector_names[i])
-            logging.info(selector_folder)
-            if not os.path.exists(selector_folder):
-                os.makedirs(selector_folder)
-                logging.info('made a folder ' + selector_folder)
-            for j in range(int(each_selector)):
-                index = i * each_selector + j
-                sample = self.get_sample(bootstraps[index])
-                filename = os.path.join(selector_folder, selector_names[i] + '_' + str(index) + '.csv')
+
+        for i in range(len(bootstraps)):
+            sample = self.get_sample(bootstraps[i])
+            for j in range(len(selectors)):
+                selector_folder = os.path.join(self.out_folder, out_name + '_' + selector_names[j])
+                if not os.path.exists(selector_folder):
+                    os.makedirs(selector_folder)
+                    logging.info('made a folder ' + selector_folder)
+                filename = os.path.join(selector_folder, selector_names[j] + '_' + str(i) + '.csv')
                 function(sample, target_column, filename)
                 filenames.append(filename)
+        
+        # for i in range(selector_len):
+        #     function = selectors[i]
+        #     selector_folder = os.path.join(self.out_folder, out_name + '_' + selector_names[i])
+        #     logging.info(selector_folder)
+        #     if not os.path.exists(selector_folder):
+        #         os.makedirs(selector_folder)
+        #         logging.info('made a folder ' + selector_folder)
+        #     for j in range(int(each_selector)):
+        #         index = i * each_selector + j
+        #         sample = self.get_sample(bootstraps[index])
+        #         filename = os.path.join(selector_folder, selector_names[i] + '_' + str(index) + '.csv')
+        #         function(sample, target_column, filename)
+        #         filenames.append(filename)
 
         final = pd.DataFrame()
         snps = pd.read_csv(filenames[0])['SNP']
