@@ -2,54 +2,228 @@ import numpy as np
 import pandas as pd
 import os
 import random
+import time
+import logging
 from skfeature.function.information_theoretical_based import LCSI
 from sklearn.feature_selection import chi2
 from statsmodels.stats.multitest import fdrcorrection
 from sklearn.feature_selection import mutual_info_classif
+import multiprocessing as mp
+from multiprocessing import Pool, Value, Manager
 '''
 This class is meant to be used to do feature selection after you have compiled your
 final dataset. Check an example usage at the end of this file.
 '''
+
+def fs_wrapper(args):
+    '''
+    Used for parallelization.
+
+    Arguments:
+        args -- a tuple that should contain two fields
+            args[0] -- rsid of snp
+            args[1] -- namespace that contains three fields
+                ns.data -- reference to the dataframe with predictors (snps) and target 
+                ns.target_arr -- target array
+                ns.func -- feature selection function that will be used
+    '''
+    predictor = np.reshape(args[1].data[args[0]].to_numpy(), (-1, 1))
+    target = args[1].target_arr
+    fs_func = args[1].func
+    result = fs_func(predictor, target)
+    return result, args[0]
+
+def chisquare(data, target, out_name):
+    '''
+    Runs parallelized chi-square feature selection on the data and the target values. Outputs
+    results to a .csv at given path
+
+    Arguments:
+        data -- dataset (in DataFrame type)
+        target -- target column label in dataset
+        outname -- name of the file to which the results will be outputted
+    '''
+    start_time = time.time()
+    # logging.info('Started rounds of feature selection at: ' + str(start_time))
+    target_arr = data[target].to_numpy().astype('int')
+    only_snp_data = data.drop(columns = [target, 'ID_1'])
+
+    mgr = Manager() # to share the same dataframe across multiple instances
+    ns = mgr.Namespace()
+    ns.data = only_snp_data
+    ns.func = chi2
+    ns.target_arr = target_arr
+    
+    individual_args = [(snp, ns) for snp in only_snp_data]
+
+    parallel_time = time.time()
+    # logging.info('Started parallelization of feature selection at: ' + str(parallel_time))
+    # logging.info('Overhead to start parallelizing: ' + (str(parallel_time - start_time)))
+    with Pool() as pool:
+        results = pool.map(fs_wrapper, individual_args)
+    mgr.shutdown()
+    
+    end_time = time.time()
+    # logging.info('Stopped parallelization of feature selection at: ' + str(parallel_time))
+    # logging.info('Parallelized step took: ' + (str(end_time - parallel_time)))
+
+    df = pd.DataFrame()
+    df["SNP"] = [result[1] for result in results]
+    df["chi2_score"] = [result[0][0][0] for result in results]
+    df["p_val"] = [result[0][1][0] for result in results]
+    df.sort_values(by="chi2_score", inplace=True, ascending = False)
+    df['rank'] = np.arange(0, len(df))
+
+    df.to_csv(out_name)
+
+def infogain(data, target, out_name):
+    '''
+    Runs infogain feature selection on the data and the target values. Outputs
+    results to a .csv at given path
+
+    Arguments:
+        data -- dataset (in DataFrame type)
+        target -- target column label in dataset
+        outname -- name of the file to which the results will be outputted
+    '''
+    start_time = time.time()
+    # logging.info('Started rounds of feature selection at: ' + str(start_time))
+    target_arr = data[target].to_numpy().astype('int')
+    only_snp_data = data.drop(columns = [target, 'ID_1'])
+
+    mgr = Manager() # to share the same dataframe across multiple instances
+    ns = mgr.Namespace()
+    ns.data = only_snp_data
+    ns.func = mutual_info_classif
+    ns.target_arr = target_arr
+    
+    individual_args = [(snp, ns) for snp in only_snp_data]
+
+    parallel_time = time.time()
+    # logging.info('Started parallelization of feature selection at: ' + str(parallel_time))
+    # logging.info('Overhead to start parallelizing: ' + (str(parallel_time - start_time)))
+    with Pool() as pool:
+        results = pool.map(fs_wrapper, individual_args)
+
+    mgr.shutdown()
+
+    end_time = time.time()
+    # logging.info('Stopped parallelization of feature selection at: ' + str(parallel_time))
+    # logging.info('Parallelized step took: ' + (str(end_time - parallel_time)))
+    
+    df = pd.DataFrame()
+    df["SNP"] = [result[1] for result in results]
+    df["infogain_score"] = [result[0] for result in results]
+    df.sort_values(by="infogain_score", inplace=True, ascending = False)
+    df['rank'] = np.arange(0, len(df))
+    
+    df.to_csv(out_name)
+
+def mrmr(data, target, out_name, **kwargs):
+    '''
+    Applies MRMR feature selection on the data and target values. Outputs
+    results to a .csv at given path
+
+    Arguments:
+        data -- dataset (in DataFrame type)
+        target -- target column label in dataset
+        outname -- name of the file to which the results will be outputted
+    ---------
+    Brown, Gavin et al. "Conditional Likelihood Maximisation: A Unifying Framework for Information Theoretic Feature Selection." JMLR 2012.
+    '''
+    target_arr = data[target].to_numpy().astype('int')
+    only_snp_data = data.drop(columns = [target, 'ID_1'])
+    data_arr = only_snp_data.to_numpy()
+    
+    if 'n_selected_features' in kwargs.keys():
+        n_selected_features = kwargs['n_selected_features']
+        F, J_CMI, MIfy= LCSI.lcsi(data_arr, target_arr, gamma=0, function_name='MRMR', n_selected_features=n_selected_features)
+    else:   
+        F, J_CMI, MIfy = LCSI.lcsi(data_arr, target_arr, gamma=0, function_name='MRMR')
+        
+    df = pd.DataFrame()
+    chosen_snps = []
+    for index in F:
+        chosen_snps.append(list(only_snp_data.columns)[index])
+    df["SNP"] = chosen_snps
+    df['rank'] = np.ones(len(df))
+    df.to_csv(out_name)
+    
+def jmi(data, target, out_name, **kwargs):
+    '''
+    Applies MRMR feature selection on the data and target values. Outputs
+    results to a .csv at given path
+
+    Arguments:
+        data -- dataset (in DataFrame type)
+        target -- target column label in dataset
+        outname -- name of the file to which the results will be outputted
+    ---------
+    Brown, Gavin et al. "Conditional Likelihood Maximisation: A Unifying Framework for Information Theoretic Feature Selection." JMLR 2012.
+    '''
+    target_arr = data[target].to_numpy().astype('int')
+    only_snp_data = data.drop(columns = [target, 'ID_1'])
+    data_arr = only_snp_data.to_numpy()
+    
+    if 'n_selected_features' in kwargs.keys():
+        n_selected_features = kwargs['n_selected_features']
+        F, J_CMI, MIfy = LCSI.lcsi(data_arr, target_arr, function_name='JMI', n_selected_features=n_selected_features)
+    else:
+        F, J_CMI, MIfy = LCSI.lcsi(data_arr, target_arr, function_name='JMI')
+    return
+
+    df = pd.DataFrame()
+    chosen_snps = []
+    for index in F:
+        chosen_snps.append(list(only_snp_data.columns)[index])
+    df["SNP"] = chosen_snps
+    df['rank'] = np.ones(len(df))
+    df.to_csv(out_name)
 
 class FeatureSelector():
     # TODO: implement init
     def __init__(
         self,
         data,
-        drop,
-        filter,
         out_folder
     ):
         '''
         Arguments:
-        data -- path to .csv file to run feature selection on
-        drop -- columns to drop from data. the resultant dataframe should only have the columns to run feature selection on
-        filter -- list of tuples (target column: target value) that will be used to filter the dataset. useful for filtering for sex
-        out_folder -- where this instance will write files to
+            data -- dataset (DataFrame) that contains features and target. should only contain features that will undergo feature selection, the ID_1 column, and the target column
+            out_folder -- where this instance will write files to
         '''
-        self.data = pd.read_csv(data)
-        self.data.drop(columns = drop, inplace = True)
+        self.data = data
         self.out_folder = out_folder
+
+        if not os.path.exists(out_folder):
+            os.makedirs(out_folder)
+
+        logging.basicConfig(filename= os.path.join(out_folder, 'feature_selector.log'), encoding='utf-8', level=logging.DEBUG)
 
     def bootstrap(self, n, k, target_column, target_outcome):
         '''
         Return a n-size list of k-size stratified random samples with replacements.
 
         Arguments:
-        n -- number of bootstraps
-        k -- number of samples in of each bootstrap
-        target_column -- column to check for stratifying
-        target_outcome -- value to check for in target_column
+            n -- number of bootstraps
+            k -- number of samples in of each bootstrap. pass -1 for the bootstrap size to be the same as the total sample sizes
+            target_column -- column to check for stratifying
+            target_outcome -- value to check for in target_column
 
         Returns:
-        bootstraps -- nested list of indices for every bootstrap
+            bootstraps -- nested list of ID_1's for every bootstrap
         '''
 
         target_df = self.data[self.data[target_column] == target_outcome]
         other_df = self.data[self.data[target_column] != target_outcome]
-        ratio = len(target_df.index) / len(self.data.index)
-        target_total = int(ratio * k)
-        other_total = k - target_total
+
+        if k == -1:
+            target_total = len(target_df.index)
+            other_total = len(other_df.index)
+        else:
+            ratio = len(target_df.index) / len(self.data.index)
+            target_total = int(ratio * k)
+            other_total = k - target_total
         
         bootstraps = []
         for i in range(0, n):
@@ -64,132 +238,38 @@ class FeatureSelector():
 
         return bootstraps
 
+    def load_bootstraps(self, file):
+        '''
+        Read a list of bootstrap participant ID's from given dataframe, and return it.
+        Useful for maintaining the same sample across different runs.
+
+        Arguments:
+            file -- path to the .csv file containing the bootstraps, where every column
+                should be a list of ID_1's for a bootstrap.
+
+        Returns:
+            bootstraps -- nested list of ID_1's for every bootstrap
+        '''
+        bootstraps = []
+        df = pd.read_csv(file, index_col = 0)
+        for col in df.columns:
+            bootstraps.append(df[col].tolist())
+        return bootstraps
+
     def get_sample(self, ids):
         '''
         Return a dataframe containing the participants with given list of ids
 
         Arguments:
-        ids -- list of ID_1's (can have repetitions)
+            ids -- list of ID_1's (can have repetitions)
 
         Returns:
-        sample -- slice from self.data containing participants with given ids
+            sample -- slice from self.data containing participants with given ids
         '''
         result = pd.DataFrame(columns = self.data.columns)
         for id in ids:
             result = pd.concat([result, self.data[self.data['ID_1'] == id]])
         return result
-            
-    
-    def chisquare(self, data, target, out_name):
-        '''
-        Runs chi-square feature selection on the data and the target values. Outputs
-        results to a .csv at given path
-    
-        Arguments:
-            data -- dataset (in DataFrame type)
-            target -- target column label in dataset
-            outname -- name of the file to which the results will be outputted
-        '''
-        target_arr = data[target].to_numpy().astype('int')
-        only_snp_data = data.drop(columns = [target, 'ID_1'])
-        data_arr = only_snp_data.to_numpy()
-        
-        chi2_score, p_val = chi2(data_arr, target_arr)
-        df = pd.DataFrame()
-        df["SNP"] = only_snp_data.columns
-        df["chi2_score"] = chi2_score.tolist()
-        df["p_val"] = p_val.tolist()
-        # TODO: normalized score!
-        df['normalized_score'] = np.arange(0, len(df))
-        df.sort_values(by="chi2_score", inplace=True, ascending = False)
-
-        df.to_csv(out_name)
-    
-    def infogain(self, data, target, out_name):
-        '''
-        Runs infogain feature selection on the data and the target values. Outputs
-        results to a .csv at given path
-    
-        Arguments:
-            data -- dataset (in DataFrame type)
-            target -- target column label in dataset
-            outname -- name of the file to which the results will be outputted
-        '''
-        target_arr = data[target].to_numpy().astype('int')
-        only_snp_data = data.drop(columns = [target, 'ID_1'])
-        data_arr = only_snp_data.to_numpy()
-        score = mutual_info_classif(data_arr, target_arr, random_state=0)
-        df = pd.DataFrame()
-        df["SNP"] = only_snp_data.columns
-        df["infogain_score"] = score.tolist()
-        # TODO: normalized score!
-        df['normalized_score'] = np.arange(0, len(df))
-        df.sort_values(by="infogain_score", inplace=True, ascending = False)
-
-        df.to_csv(out_name)
-    
-    def mrmr(self, data, target, out_name, **kwargs):
-        '''
-        Applies MRMR feature selection on the data and target values. Outputs
-        results to a .csv at given path
-
-        Arguments:
-            data -- dataset (in DataFrame type)
-            target -- target column label in dataset
-            outname -- name of the file to which the results will be outputted
-        ---------
-        Brown, Gavin et al. "Conditional Likelihood Maximisation: A Unifying Framework for Information Theoretic Feature Selection." JMLR 2012.
-        '''
-        target_arr = data[target].to_numpy().astype('int')
-        only_snp_data = data.drop(columns = [target, 'ID_1'])
-        data_arr = only_snp_data.to_numpy()
-        
-        if 'n_selected_features' in kwargs.keys():
-            n_selected_features = kwargs['n_selected_features']
-            F, J_CMI, MIfy= LCSI.lcsi(data_arr, target_arr, gamma=0, function_name='MRMR', n_selected_features=n_selected_features)
-        else:   
-            F, J_CMI, MIfy = LCSI.lcsi(data_arr, target_arr, gamma=0, function_name='MRMR')
-            
-        df = pd.DataFrame()
-        chosen_snps = []
-        for index in F:
-            chosen_snps.append(list(only_snp_data.columns)[index])
-        df["SNP"] = chosen_snps
-        # TODO: normalized score!
-        df['normalized_score'] = np.arange(0, len(df))
-        df.to_csv(out_name)
-        
-    def jmi(self, data, target, out_name, **kwargs):
-        '''
-        Applies MRMR feature selection on the data and target values. Outputs
-        results to a .csv at given path
-
-        Arguments:
-            data -- dataset (in DataFrame type)
-            target -- target column label in dataset
-            outname -- name of the file to which the results will be outputted
-        ---------
-        Brown, Gavin et al. "Conditional Likelihood Maximisation: A Unifying Framework for Information Theoretic Feature Selection." JMLR 2012.
-        '''
-        target_arr = data[target].to_numpy().astype('int')
-        only_snp_data = data.drop(columns = [target, 'ID_1'])
-        data_arr = only_snp_data.to_numpy()
-        
-        if 'n_selected_features' in kwargs.keys():
-            n_selected_features = kwargs['n_selected_features']
-            F, J_CMI, MIfy = LCSI.lcsi(data_arr, target_arr, function_name='JMI', n_selected_features=n_selected_features)
-        else:
-            F, J_CMI, MIfy = LCSI.lcsi(data_arr, target_arr, function_name='JMI')
-        return
-
-        df = pd.DataFrame()
-        chosen_snps = []
-        for index in F:
-            chosen_snps.append(list(only_snp_data.columns)[index])
-        df["SNP"] = chosen_snps
-        # TODO: normalized score!
-        df['normalized_score'] = np.arange(0, len(df))
-        df.to_csv(out_name)
 
     def bootstrapped_feat_select(self, n, k, target_column, target_outcome, selectors, selector_names, out_name):
         '''
@@ -220,8 +300,10 @@ class FeatureSelector():
         for i in range(selector_len):
             function = selectors[i]
             selector_folder = os.path.join(self.out_folder, out_name + '_' + selector_names[i])
+            logging.info(selector_folder)
             if not os.path.exists(selector_folder):
                 os.makedirs(selector_folder)
+                logging.info('made a folder ' + selector_folder)
             for j in range(int(each_selector)):
                 index = i * each_selector + j
                 sample = self.get_sample(bootstraps[index])
@@ -232,62 +314,42 @@ class FeatureSelector():
         final = pd.DataFrame()
         snps = pd.read_csv(filenames[0])['SNP']
         final['SNP'] = snps
-        final['total_normalized_score'] = np.zeros(len(snps))
+        final['total_rank'] = np.zeros(len(snps))
         for file in filenames:
             curr_file = pd.read_csv(file)
             for snp in final['SNP']:
-                final.loc[final['SNP'] == snp, 'total_normalized_score'] += curr_file.loc[final['SNP'] == snp, 'normalized_score']
+                final.loc[final['SNP'] == snp, 'total_rank'] += curr_file.loc[final['SNP'] == snp, 'rank']
 
-        final.sort_values(by = 'total_normalized_score', ascending = False)
+        final.sort_values(by = 'total_rank', ascending = False)
         final.to_csv(os.path.join(self.out_folder, out_name + '.csv'))
+
+        bootstrap_df = pd.DataFrame()
+        for i in range(len(bootstraps)):
+            name = 'bootstrap_' + str(i + 1)
+            bootstrap_df[name] = bootstraps[i]
+
+        bootstrap_df.to_csv(os.path.join(self.out_folder, out_name + '_bootstraps.csv'))
+            
 
 '''
 Below is an example usage
 '''
 
+'''
 def main():
-    drop = [
-        'Sex',
-        'Age',
-        'Unnamed: 0',
-        'Unnamed: 0.1',
-        'Unnamed: 0.2',
-        'Lifetime number of depressed periods',
-        'Bipolar and major depression status',
-        'PHQ9',
-        'PHQ9_multiclass',
-        'Chronotype',
-        'Getting up in the morning',
-        'Prolonged feeling of sadness/depression',
-        'Sleeplessness/Insomnia'   
-    ]
+    data = pd.read_csv('/home/mminbay/summer_research/summer23_aylab/data/imputed_data/final_data/final_depression_allsnps_6000extra_c1.csv', index_col = 0)
+
+    data.drop(columns = ['Sex'], inplace = True)
+    
     fselect = FeatureSelector(
-        '/home/mminbay/summer_research/summer23_aylab/data/kremaliborek.csv', 
-        drop, 
-        [], 
+        data, 
         '/home/mminbay/summer_research/summer23_aylab/data/feat_select/'
     )
     fselect.bootstrapped_feat_select(10, 1000, 'PHQ9_binary', 1, [fselect.chisquare, fselect.infogain], ['chi2', 'infogain'], 'test')
-
     
-    # bootstraps = fselect.bootstrap(10, 500, 'PHQ9_binary', 1)
-
-    # name = '{}_{}'
-    # for i in range (0, 5):
-    #     method = 'chi2'
-    #     bootstrap = bootstraps[i]
-    #     sample = fselect.get_sample(bootstrap)
-    #     fselect.chisquare(sample, 'PHQ9_binary', name.format(method, str(i + 1))+'.csv')
-
-    # for i in range (5, 10):
-    #     method = 'infogain'
-    #     bootstrap = bootstraps[i]
-    #     sample = fselect.get_sample(bootstrap)
-    #     fselect.infogain(sample, 'PHQ9_binary', name.format(method, str(i + 1))+'.csv')
-    
-
 if __name__ == '__main__':
     main()
+'''
             
         
         

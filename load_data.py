@@ -59,11 +59,11 @@ class DataLoader():
         Reads given .txt file and stores list of chroms and rsids as instance variables
         
         Arguments:
-        file -- Path to the .txt file containing the SNP information. The .txt file should have the format <chrom_number>, <rsid> for every line
+            file -- Path to the .txt file containing the SNP information. The .txt file should have the format <chrom_number>, <rsid> for every line
     
         Modified instance variables:
-        chroms -- list of chromosomes 
-        rsids -- nested list of rsids on each chromosome. rsids[i] is the list of SNPs on the chroms[i] chromosome.
+            chroms -- list of chromosomes 
+            rsids -- nested list of rsids on each chromosome. rsids[i] is the list of SNPs on the chroms[i] chromosome.
         '''
         chroms, rsids = [], []
         prev_chrom, idx = -1, -1
@@ -90,12 +90,12 @@ class DataLoader():
         Reads given .txt file and stores list of chroms and intervals as instance variables
         
         Arguments:
-        file -- Path to the .txt file containing the interval information. The .txt file should have the format <chrom_number>, <interval_start>-<interval_end>
+            file -- Path to the .txt file containing the interval information. The .txt file should have the format <chrom_number>, <interval_start>-<interval_end>
         for every line
     
         Modified instance variables:
-        chroms -- list of chromosomes 
-        intervals -- nested list of intervals on each chromosome. intervals[i] is the list of intervals on the chroms[i] chromosome.
+            chroms -- list of chromosomes 
+            intervals -- nested list of intervals on each chromosome. intervals[i] is the list of intervals on the chroms[i] chromosome.
         '''
         chroms, intervals = [], []
         prev_chrom, idx = -1, -1
@@ -180,6 +180,9 @@ class DataLoader():
         self, 
         data,
         extra = 6000,
+        keep = range(1, 23),
+        ignore = [],
+        threshold = 0.0,
         table_name = 'imputed_{}',
         export = True,
         keep_track_as = 'path',
@@ -193,6 +196,9 @@ class DataLoader():
         Arguments:
             data -- path to .csv file containing the ID_1's to use
             extra -- number of base pairs subtracted from interval starts and added to interval ends to stretch search intervals
+            keep -- chromosomes to keep, where the rest will be ignored. useful for splitting the chromosomes into multiple runs
+            ignore -- chromosome's to ignore. useful for running multiple runs
+            threshold -- frequency threshold to keep track of snps. snps rarer than this threshold will be discarded
             table_name -- name format for dataframe for each chromosome, where {} will be chromosome number. will also be used for .csv export file names
             export -- whether each chromosome dataframe should be exported on their own as well
             keep_track_as ('path', 'table', '') -- how this instance will store each chromosome data in self.tables. pass empty string for no storing.
@@ -223,6 +229,9 @@ class DataLoader():
         for i in range(len(chroms)):
             current_chrom = chroms[i]
             current_intervals = intervals[i]
+
+            if current_chrom in ignore or current_chrom not in keep:
+                continue
 
             if use_list:
                 current_rsids = set(rsids[i]) # again, make this a set to save some time
@@ -259,9 +268,16 @@ class DataLoader():
                     if len(probabilities) != len(all_ids):
                         raise Exception('List of ids should match probabilities')
                     row = []
+                    sum_snp = 0
+                    sum_all = 0
                     for j in range(len(probabilities)):
+                        sum_all += 1
+                        if probabilities[j].argmax() > 0:
+                            sum_snp += 1
                         if all_ids[j] in ids_to_keep:
                             row.append(probabilities[j].argmax())
+                    if sum_snp / sum_all < threshold:
+                        continue
                     rows.append(row)
 
                     if get_alleles:
@@ -580,16 +596,30 @@ class DataLoader():
 Below is an example usage
 '''
 
-# OUTDATED! REDO
 # def main():
 #     dl = DataLoader(
-#         genetics_folder = '/shared/datalake/summer23Ay/data1/ukb_genetic_data',
-#         genetics_format = 'ukb22438_c{}_b0_v2.bgen',
-#         imputed_ids_path = '/shared/datalake/summer23Ay/data1/ukb_genetic_data/ukb22828_c1_b0_v3_s487166.csv',
+#         genetics_folder = '/datalake/AyLab/data1/ukb_genetic_data',
+#         genetics_format = 'ukb22828_c{}_b0_v3.bgen',
+#         imputed_ids_path = '/datalake/AyLab/data1/ukb_genetic_data/ukb22828_c1_b0_v3_s487159.csv',
 #         out_folder = '/home/mminbay/summer_research/summer23_aylab/data/'
 #     ) # create dataloader
+
+#     print('created dataloader')
     
-#     dl.loadChromsAndRsidsFromInterval('/home/mminbay/summer_research/summer23_aylab/data/snps/intervals.txt') # load intervals
+#     dl.load_chroms_and_intervals('/home/mminbay/summer_research/summer23_aylab/data/snps/gene_by_gene/c15_i1.txt')
+
+#     dl.get_imputed_from_intervals_for_ids(
+#         '/home/mminbay/summer_research/summer23_aylab/data/depression_data.csv',
+#         extra = 0,
+#         keep = [15],
+#         table_name = 'c{}_i1',
+#         export = True,
+#         keep_track_as = 'path',
+#         use_list = False,
+#         get_alleles = True
+#     )
+    
+        
     
 #     clinical_factors = [
 #         ("Sex", 31, "binary"),
@@ -598,17 +628,13 @@ Below is an example usage
 #         ("Sleeplessness/Insomnia", 1200, "continuous"),
 #     ] # an example phenotype dataset
 
-#     dl.make_table('clinical factors', clinical_factors) # make dataset
+#     dl.create_table('clinical factors', clinical_factors) # make dataset
 
 #     dl.calcPHQ9('PHQ9 scores', binary_cutoff = 10) # make PHQ9 dataset
 
-#     dl.getImputedGeneticInformationFromIntervals(
-#         extra = 5000, 
-#         export_name = 'haplotype_imputed_{}.csv',
-#         keep_track_as = 'table'
-#     ) # make imputed genetic info dataset from loaded intervals
 
-#     dl.export(on_col = 'ID_1', out = 'export_test.csv') # export all informartion as a single table
+
+#     dl.export_all(['Sex', 'Age', 'Chronotype', 'Sleeplessness/Insomnia'], filename = 'depression23') # export all informartion as a single table
 
 # if __name__ == "__main__":
 #     main()

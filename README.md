@@ -1,7 +1,6 @@
 # summer23_aylab
 
 This repository contains information about the codebase and how to use it.
-
 ## Prerequisites
 ### Dependencies – Turing Cluster  
 
@@ -86,9 +85,16 @@ $ cd /whichever/directory/you/will/call/gfetch/from/
 $ wget  -nd  biobank.ndph.ox.ac.uk/ukb/util/gfetch
 ```
 
-
 ### Configuring `.env`  
 Since you might want to organize your `data` folder as you wish, there is a `.env.example` provided in this repository. Set the environment variables as appropriate and rename the file to `.env` to make it usable.
+
+## Usage
+### `load_data.py`
+This file defines the `DataLoader` class, which is meant to help you compile a final dataset from your phenotype data and genetic data.  
+* 
+
+
+## Example
 
 ## additional resources in this repository  
 Check `reusable_code.md` for functions from Hieu and Cole's code that we might use.
