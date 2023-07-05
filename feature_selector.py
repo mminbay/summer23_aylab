@@ -9,7 +9,8 @@ from sklearn.feature_selection import chi2
 from statsmodels.stats.multitest import fdrcorrection
 from sklearn.feature_selection import mutual_info_classif
 import multiprocessing as mp
-from multiprocessing import Pool, Value, Manager
+from multiprocessing import Pool
+from shared_objects import SharedNumpyArray, SharedPandasDataFrame
 '''
 This class is meant to be used to do feature selection after you have compiled your
 final dataset. Check an example usage at the end of this file.
@@ -20,16 +21,16 @@ def fs_wrapper(args):
     Used for parallelization.
 
     Arguments:
-        args -- a tuple that should contain two fields
+        args -- a tuple that should contain four fields
             args[0] -- rsid of snp
-            args[1] -- namespace that contains three fields
-                ns.data -- reference to the dataframe with predictors (snps) and target 
-                ns.target_arr -- target array
-                ns.func -- feature selection function that will be used
+            args[1] -- feature selection function to be used
+            args[2] -- reference to shared df object
+            args[3] -- reference to shared target arr object
     '''
-    predictor = np.reshape(args[1].data[args[0]].to_numpy(), (-1, 1))
-    target = args[1].target_arr
-    fs_func = args[1].func
+    data = args[2].read()
+    target = args[3].read()
+    predictor = np.reshape(data[args[0]].to_numpy(), (-1, 1))
+    fs_func = args[1]
     result = fs_func(predictor, target)
     return result, args[0]
 
@@ -44,28 +45,26 @@ def chisquare(data, target, out_name):
         outname -- name of the file to which the results will be outputted
     '''
     start_time = time.time()
-    # logging.info('Started rounds of feature selection at: ' + str(start_time))
+    logging.info('Started rounds of feature selection at: ' + str(start_time))
     target_arr = data[target].to_numpy().astype('int')
     only_snp_data = data.drop(columns = [target, 'ID_1'])
 
-    mgr = Manager() # to share the same dataframe across multiple instances
-    ns = mgr.Namespace()
-    ns.data = only_snp_data
-    ns.func = chi2
-    ns.target_arr = target_arr
+    shared_snp_data = SharedPandasDataFrame(only_snp_data)
+    shared_target_arr = SharedNumpyArray(target_arr)
     
-    individual_args = [(snp, ns) for snp in only_snp_data]
+    individual_args = [(snp, chi2, shared_snp_data, shared_target_arr) for snp in only_snp_data]
 
     parallel_time = time.time()
-    # logging.info('Started parallelization of feature selection at: ' + str(parallel_time))
-    # logging.info('Overhead to start parallelizing: ' + (str(parallel_time - start_time)))
+    logging.info('Started parallelization of feature selection at: ' + str(parallel_time))
+    logging.info('Overhead to start parallelizing: ' + (str(parallel_time - start_time)))
     with Pool() as pool:
         results = pool.map(fs_wrapper, individual_args)
-    mgr.shutdown()
+    shared_snp_data.unlink()
+    shared_target_arr.unlink()
     
     end_time = time.time()
-    # logging.info('Stopped parallelization of feature selection at: ' + str(parallel_time))
-    # logging.info('Parallelized step took: ' + (str(end_time - parallel_time)))
+    logging.info('Stopped parallelization of feature selection at: ' + str(parallel_time))
+    logging.info('Parallelized step took: ' + (str(end_time - parallel_time)))
 
     df = pd.DataFrame()
     df["SNP"] = [result[1] for result in results]
@@ -91,29 +90,26 @@ def infogain(data, target, out_name):
     target_arr = data[target].to_numpy().astype('int')
     only_snp_data = data.drop(columns = [target, 'ID_1'])
 
-    mgr = Manager() # to share the same dataframe across multiple instances
-    ns = mgr.Namespace()
-    ns.data = only_snp_data
-    ns.func = mutual_info_classif
-    ns.target_arr = target_arr
+    shared_snp_data = SharedPandasDataFrame(only_snp_data)
+    shared_target_arr = SharedNumpyArray(target_arr)
     
-    individual_args = [(snp, ns) for snp in only_snp_data]
+    individual_args = [(snp, mutual_info_classif, shared_snp_data, shared_target_arr) for snp in only_snp_data]
 
     parallel_time = time.time()
-    # logging.info('Started parallelization of feature selection at: ' + str(parallel_time))
-    # logging.info('Overhead to start parallelizing: ' + (str(parallel_time - start_time)))
+    logging.info('Started parallelization of feature selection at: ' + str(parallel_time))
+    logging.info('Overhead to start parallelizing: ' + (str(parallel_time - start_time)))
     with Pool() as pool:
         results = pool.map(fs_wrapper, individual_args)
-
-    mgr.shutdown()
+    shared_snp_data.unlink()
+    shared_target_arr.unlink()
 
     end_time = time.time()
-    # logging.info('Stopped parallelization of feature selection at: ' + str(parallel_time))
-    # logging.info('Parallelized step took: ' + (str(end_time - parallel_time)))
+    logging.info('Stopped parallelization of feature selection at: ' + str(parallel_time))
+    logging.info('Parallelized step took: ' + (str(end_time - parallel_time)))
     
     df = pd.DataFrame()
     df["SNP"] = [result[1] for result in results]
-    df["infogain_score"] = [result[0] for result in results]
+    df["infogain_score"] = [result[0][0] for result in results]
     df.sort_values(by="infogain_score", inplace=True, ascending = False)
     df['rank'] = np.arange(0, len(df))
     
@@ -295,6 +291,7 @@ class FeatureSelector():
         for i in range(len(bootstraps)):
             sample = self.get_sample(bootstraps[i])
             for j in range(len(selectors)):
+                function = selectors[j]
                 selector_folder = os.path.join(self.out_folder, out_name + '_' + selector_names[j])
                 if not os.path.exists(selector_folder):
                     os.makedirs(selector_folder)
@@ -302,31 +299,34 @@ class FeatureSelector():
                 filename = os.path.join(selector_folder, selector_names[j] + '_' + str(i) + '.csv')
                 function(sample, target_column, filename)
                 filenames.append(filename)
-        
-        # for i in range(selector_len):
-        #     function = selectors[i]
-        #     selector_folder = os.path.join(self.out_folder, out_name + '_' + selector_names[i])
-        #     logging.info(selector_folder)
-        #     if not os.path.exists(selector_folder):
-        #         os.makedirs(selector_folder)
-        #         logging.info('made a folder ' + selector_folder)
-        #     for j in range(int(each_selector)):
-        #         index = i * each_selector + j
-        #         sample = self.get_sample(bootstraps[index])
-        #         filename = os.path.join(selector_folder, selector_names[i] + '_' + str(index) + '.csv')
-        #         function(sample, target_column, filename)
-        #         filenames.append(filename)
 
         final = pd.DataFrame()
         snps = pd.read_csv(filenames[0])['SNP']
         final['SNP'] = snps
-        final['total_rank'] = np.zeros(len(snps))
+        final['total_chi2'] = np.zeros(len(snps))
+        final['total_infogain'] = np.zeros(len(snps))
+        final['nan_chi2'] = np.zeros(len(snps))
+        final['nan_infogain'] = np.zeros(len(snps))
         for file in filenames:
             curr_file = pd.read_csv(file)
+            if 'chi2' in file:
+                total_column = 'total_chi2'
+                nan_column = 'nan_chi2'
+                target_column = 'chi2_score'
+            elif 'infogain' in file:
+                total_column = 'total_infogain'
+                nan_column = 'nan_infogain'
+                target_column = 'infogain_score'
             for snp in final['SNP']:
-                final.loc[final['SNP'] == snp, 'total_rank'] += curr_file.loc[final['SNP'] == snp, 'rank']
-
-        final.sort_values(by = 'total_rank', ascending = False)
+                result = curr_file.loc[curr_file['SNP'] == snp, target_column]
+                if result.isna().item():
+                    final.loc[final['SNP'] == snp, nan_column] += 1
+                else:
+                    final.loc[final['SNP'] == snp, total_column] += curr_file.loc[curr_file['SNP'] == snp, target_column].item()
+                    
+        
+        final['average_chi2'] = final['total_chi2'] / ((final['nan_chi2'] * -1) + n)
+        final['average_infogain'] = final['total_infogain'] / ((final['nan_infogain'] * -1) + n)
         final.to_csv(os.path.join(self.out_folder, out_name + '.csv'))
 
         bootstrap_df = pd.DataFrame()
