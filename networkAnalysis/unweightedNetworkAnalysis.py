@@ -8,7 +8,7 @@ Will add a step-by-step guide on how to use file below:
 
 import networkx as nx
 from networkx.algorithms.community import k_clique_communities
-import networkit as nk           # Import networkit library for its katz similarity function, you need to install networkit  
+import networkit as nk           # Import networkit library for its katz similarity function, you may need to pip install networkit  
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import colors
