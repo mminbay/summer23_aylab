@@ -12,4 +12,7 @@ skfeature-chappers
 keras
 tensorflow
 pandas-plink
-
+linearmodels
+bioinfokit
+mne
+researchpy

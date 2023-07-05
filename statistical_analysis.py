@@ -11,7 +11,7 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 import matplotlib.pyplot as plt
 import seaborn as sns
 from statsmodels.genmod.generalized_linear_model import GLM
-from statsmodels.genmod import familie
+from statsmodels.genmod import families
 from rpy2.robjects.packages import importr
 from rpy2.robjects import r, pandas2ri, numpy2ri
 numpy2ri.activate()
@@ -23,6 +23,7 @@ from utilities import relabel
 from data_processor import data_processor
 from scipy.stats import sem
 from scipy import stats
+import random
 
 '''
 This class is meant to take care of all your statistical analysis. 
@@ -800,4 +801,45 @@ class Stat_Analyzer():
         print("AIC: {}".format(res.aic))
         print("BIC: {}".format(res.bic))
     
+# Testing the code, doesn't work rn, have to update
+def main():
 
+# getting and formatting a test file for log regression
+    clinical_df = pd.read_csv("/datalake/AyLab/depression_testing/depression_data_ohc.csv", index_col = 0)
+    clinical_df.drop(['PHQ9', 'Sex', 'Age'], axis=1, inplace=True)
+    snp_df = pd.read_csv("/datalake/AyLab/depression_snp_data/dominant_model/dominant_depression_allsnps_6000extra_c1.csv", index_col = 0, nrows = 1000)
+    snp_df.drop(['PHQ9_binary', 'Sex'], axis=1, inplace=True)
+    all_cols = snp_df.columns.tolist()
+    snp_cols = [col for col in all_cols if col not in ['ID_1']]
+    random_50_snps_withID = random.sample(snp_cols, 50) # randomly taking 50 snps for testing
+    random_50_snps_withID.append('ID_1') # adding ID to the snps
+    snp_df = snp_df[random_50_snps_withID]
+    
+    snp_and_clinical_df = pd.merge(snp_df, clinical_df, on='ID_1')
+    snp_and_clinical_df.dropna(inplace = True) # drop rows with missing values
+
+# init values
+    binOHCdata = snp_and_clinical_df 
+    out_folder = '/home/akhan/repo_punks_mete/summer23_aylab/data/'
+    nonbinOHCdata, binnonOHCdata, nonbinnonOHCdata, r_path= None
+    
+# Create an instance of Stat_Analyzer
+    analyzer = Stat_Analyzer(
+        binOHCdata, 
+        nonbinOHCdata, 
+        binnonOHCdata, 
+        nonbinnonOHCdata, 
+        r_path, 
+        out_folder
+    )
+
+    
+    
+    # Run multivariate logistic regression
+    target_variable = "PHQ9_Binary"
+    output_file = "test_multvar_log_reg.csv"
+    analyzer.multivariate_logistic_regression(target_variable, output_file)
+
+# Execute the main function
+if __name__ == "__main__":
+    main()
