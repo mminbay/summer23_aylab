@@ -3,6 +3,7 @@ import numpy as np
 import statsmodels.formula.api as smf
 from linearmodels.iv import IV2SLS
 import pandas as pd
+import statsmodels
 import statsmodels.api as sm
 import bioinfokit.analys
 from mne.stats import fdr_correction
@@ -10,20 +11,22 @@ import researchpy as rp
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import matplotlib.pyplot as plt
 import seaborn as sns
-from statsmodels.genmod.generalized_linear_model import GLM
+from statsmodels.genmod.generalized_linear_model import GLM, SET_USE_BIC_LLF
 from statsmodels.genmod import families
-from rpy2.robjects.packages import importr
-from rpy2.robjects import r, pandas2ri, numpy2ri
-numpy2ri.activate()
-from rpy2.robjects.conversion import localconverter
-import rpy2.robjects as ro
+# from rpy2.robjects.packages import importr
+# from rpy2.robjects import r, pandas2ri, numpy2ri
+# numpy2ri.activate()
+# from rpy2.robjects.conversion import localconverter
+# import rpy2.robjects as ro
 import itertools
-import statsmodels
-from utilities import relabel
-from data_processor import data_processor
+# from utilities import relabel  # hardcoded. relabel functional will be updated when anova needed
+# from data_processor import data_processor  # this is not being used
 from scipy.stats import sem
 from scipy import stats
 import random
+from mlxtend.frequent_patterns import apriori
+from mlxtend.frequent_patterns import association_rules
+import networkx as nx
 
 '''
 This class is meant to take care of all your statistical analysis. 
@@ -35,6 +38,7 @@ class Stat_Analyzer():
     def __init__(
         self,
         binOHCdata,
+        binOHCdata_withBase,
         nonbinOHCdata,
         binnonOHCdata,
         nonbinnonOHCdata,
@@ -44,6 +48,7 @@ class Stat_Analyzer():
         '''
         Arguments:
             binOHCdata -- dataframe to be analyzed, where categorical features are OHC'd and outcome is binarized
+            binOHCdata_withBase -- dataframe that's the same as binOHCdata, but does not have the baseline for the OHC removed. Used in ARL only
             nonbinOHCdata -- dataframe to be analyzed, where categorical features are OHC'd and outcome is continuous
             binnonOHCdata -- dataframe to be analyzed, where categorical features are not OHC'd and outcome is binarized
             nonbinnonOHCdata -- dataframe to be analyzed, where categorical features are not OHC'd and outcome is continuous
@@ -52,6 +57,7 @@ class Stat_Analyzer():
 
         '''
         self.binOHCdata = binOHCdata
+        self.binOHCdata_withBase = binOHCdata_withBase
         self.nonbinOHCdata = nonbinOHCdata
         self.binnonOHCdata = binnonOHCdata
         self.nonbinnonOHCdata = nonbinnonOHCdata
@@ -608,17 +614,18 @@ class Stat_Analyzer():
             self.mediation['results'] = dfR
             capture(dfR, file = result_file)
 
+    # ARL below was written mostly by chatgpt, so we may have to check for errors. doesn't use R. refer to cole's code for the old version
     def association_rule_learning(
         self, 
         target,
-        continuous = [],
-        min_support = 0.00045, 
-        min_confidence = 0.02, 
-        min_items = 2, 
-        max_items = 5, 
-        min_lift = 2, 
-        protective = False,
-        out_file = 'arl.csv'
+        continuous=[],
+        min_support=0.00045, 
+        min_confidence=0.02, 
+        min_items=2, 
+        max_items=5, 
+        min_lift=2, 
+        protective=False,
+        out_file='arl.csv'
     ):
         '''
         Conducts association rule learning on binarized, OHC data for given target variable.
@@ -635,103 +642,47 @@ class Stat_Analyzer():
             protective -- if True, the rhs values will be flipped to find protective features
             out_file -- name of output .txt file (no extension required)
         '''
-        data = self.binOHCdata.copy(deep = True)
+        data = self.binOHCdata_withBase.copy(deep=True)
         data.columns = data.columns.str.replace(' ', '_')
         data.columns = data.columns.str.replace('.', '_')
 
         # remove all columns with more than 2 unique values -- this ensures all features are binarized
         for col in data.columns:
             if len(data[col].unique()) > 2:
-                data.drop([col], axis = 1, inplace = True)
-        
-        data.drop(continuous, axis = 1, inplace = True)
-        
+                data.drop([col], axis=1, inplace=True)
+            
+        data.drop(continuous, axis=1, inplace=True)
+            
         result_folder = os.path.join(self.out_folder, 'association_rule_learning')
         if not os.path.exists(result_folder):
             os.makedirs(result_folder)
-        
+            
         if protective:
             data[target] = np.absolute(np.array(data[target].values) - 1)
-        
+            
         apriori_path = os.path.join(result_folder, out_file + '_apriori.csv')
-        data.to_csv(apriori_path) # tmp file for Rscript to work with
-        args = result_folder + ' ' + str(min_support) + ' '  + str(min_confidence) + ' ' + str(max_items) + ' ' + str(min_items) + ' ' + str(target) + ' ' + str(min_lift)
-        os.system('Rscript ' + os.path.join(self.r_path, 'Association_Rules.R') + ' ' + args) # execute R from cmd
-        os.remove(apriori_path) # remove the tmp file
+        data.to_csv(apriori_path) # tmp file for Python code to work with
 
-        r_result_path = os.path.join(result_folder, 'apriori.csv')
-        if os.path.exists(r_result_path):
-            ARLRules = pd.read_csv(r_result_path)
-            pvals = ARLRules['pValue']
-            pvals = fdr_correction(pvals, alpha=0.05, method='indep')
-            ARLRules['adj pVals'] = pvals[1]
-        else:
-            print('No rules meeting minimum requirements were found')
-            print('Process Terminated')
-            return
-        os.remove(r_result_path)
-
-        variables = ARLRules['LHS'].tolist()
-        features, newF, rows, pvals = list(), list(), list(), list()
-        oddsRatios = pd.DataFrame(columns=['LHS-RHS', 'Odds Ratio', 'Confidence Interval', 'pValue', 'adjusted pVal'])
-        for var in variables:
-            newF.append(var)
-            features.append(var.replace('{', '').replace('}', '').split(','))
-        for i in range(len(features)):
-            cols = features[i]
-            newFeature = newF[i]
-            dataC = data.drop([x for x in data.columns if x not in cols], axis = 1)
-            dataC[newFeature] = dataC[dataC.columns[:]].apply(lambda x: ','.join(x.astype(str)),axis=1)
-            dataC = dataC[[newFeature]]
-            dataC[target] = data[target]
-            toDrop = list()
-            for index, r in dataC.iterrows():                
-                fValue = set(r[newFeature].split(','))
-                if (len(fValue) > 1):
-                    toDrop.append(index)
-            dataC.drop(toDrop, inplace = True)
-            dataTrue = dataC[dataC[rhs] == 1].drop([rhs], axis =1).value_counts().tolist()
-            dataFalse = dataC[dataC[rhs] == 0].drop([rhs], axis = 1).value_counts().tolist()
-            if len(dataTrue) == 1:
-                dataTrue.append(0)
-            if len(dataFalse) == 1:
-                dataFalse.append(0)
-            dataTrue.reverse(); dataFalse.reverse()
-            
-            table = np.array([dataTrue, dataFalse])
-            print(table)
-            res = statsmodels.stats.contingency_tables.Table2x2(table, shift_zeros = True)
-
-            rows.append([str(newFeature)+'-'+str(rhs), 
-            res.oddsratio, res.oddsratio_confint(), res.oddsratio_pvalue()])
-            pvals.append(res.oddsratio_pvalue())
-            
-        pvals = fdr_correction(pvals, alpha=0.05, method='indep')
-        for i in range(len(pvals[1])):
-            rows[i].append(pvals[1][i])
-            oddsRatios.loc[len(oddsRatios.index)] = rows[i]
-            
-        association = open(os.path.join(result_folder, out_file + '.txt'), 'w')
-        association.write(ARLRules.to_string(index=False))
-        association.write('\n\n----------------------------------------------------------------------------------------\n\n')
-        association.write('\n\nOdds Ratio analysis for Association Rule Learning: \n----------------------------------------------------------------------------------------\n\n')
-        for i in range(len(oddsRatios)):
-            two_var = oddsRatios.iloc[i, :]
-            two_var = two_var.to_frame()
-            variables = str(two_var.iloc[0,0]).split('-')
-            two_var = two_var.iloc[1: , :]
-            association.write('The odds ratio, p-Value, and confidence interval between ' +variables[0]+' and ' + variables[1] + ' are: \n\n')
-            toWrite = two_var.to_string(header = False, index = True)
-            association.write(toWrite+'\n')
-            association.write('----------------------------------------------------------------------------------------\n\n')
-        association.close()
-
+        # Generate association rules using mlxtend
         if protective:
-            self.ARL['ARLProtect'] = ARLRules
+            rules = apriori(data, min_support=min_support, use_colnames=True)
+            rules = association_rules(rules, metric="lift", min_threshold=min_lift)
+            rules = rules[rules['consequents'].astype(str).str.contains(target)]
         else:
-            self.ARL['ARLRisk'] = ARLRules
-        
-        return ARLRules
+            rules = apriori(data, min_support=min_support, use_colnames=True)
+            rules = association_rules(rules, metric="lift", min_threshold=min_lift)
+
+        # Filter rules based on length
+        rules = rules[(rules['antecedents'].apply(lambda x: len(x)) >= min_items) &
+                    (rules['antecedents'].apply(lambda x: len(x)) <= max_items)]
+
+        # Sort rules by lift
+        rules = rules.sort_values(by='lift', ascending=False)
+
+        if rules.empty:
+            print('No association rules found.')
+        else:
+            return rules
     
     def multivariate_linear_regression(self, target, out_file = 'mvlin.csv'):
         '''
@@ -743,19 +694,20 @@ class Stat_Analyzer():
 
         logm2 = sm.GLM(y_train, x_train_sm, family=sm.families.Binomial())
         res = logm2.fit()
-        display_regression_results(x_train_sm.columns, res, out_file)
+        self.display_regression_results(x_train_sm.columns, res, out_file)
     
     def multivariate_logistic_regression(self, target, out_file = 'mvlog.csv'):
         '''
         Runs multivariate regression on binarized, OHC data for given target variable.
         Saves results as a .csv file with given name
         '''
+        self.binOHCdata.drop(['ID_1'], axis=1, inplace=True)
         y_train = self.binOHCdata[target]
         x_train_sm = sm.add_constant(self.binOHCdata.drop(columns = [target]))
 
         logm2 = sm.GLM(y_train, x_train_sm, family=sm.families.Binomial())
         res = logm2.fit()
-        display_regression_results(x_train_sm.columns, res, out_file)
+        self.display_regression_results(x_train_sm.columns, res, out_file)
 
     def display_regression_results(self, variable, res, out_file):
         '''
@@ -789,7 +741,7 @@ class Stat_Analyzer():
             left_on="variable",
             right_index=True,
         )
-        adjusted = fdrcorrection(res.pvalues, method="indep", is_sorted=False)[1]
+        adjusted = fdr_correction(res.pvalues, alpha=0.05, method="indep")[1]
         df["adjusted pval"] = adjusted
         df = df.sort_values(by="adjusted pval")
         
@@ -806,27 +758,32 @@ def main():
 
 # getting and formatting a test file for log regression
     clinical_df = pd.read_csv("/datalake/AyLab/depression_testing/depression_data_ohc.csv", index_col = 0)
-    clinical_df.drop(['PHQ9', 'Sex', 'Age'], axis=1, inplace=True)
-    snp_df = pd.read_csv("/datalake/AyLab/depression_snp_data/dominant_model/dominant_depression_allsnps_6000extra_c1.csv", index_col = 0, nrows = 1000)
-    snp_df.drop(['PHQ9_binary', 'Sex'], axis=1, inplace=True)
+    clinical_df.drop(['Sex', 'Age'], axis=1, inplace=True)
+    snp_df = pd.read_csv("/datalake/AyLab/depression_snp_data/FAULTY_dominant_model/dominant_depression_allsnps_6000extra_c1.csv", index_col = 0, nrows = 1000)
+    snp_df.drop(['PHQ9_binary', 'Sex'], axis=1, inplace=True) # dropping phq9_binary cuz clinical already has it
     all_cols = snp_df.columns.tolist()
     snp_cols = [col for col in all_cols if col not in ['ID_1']]
-    random_50_snps_withID = random.sample(snp_cols, 50) # randomly taking 50 snps for testing
-    random_50_snps_withID.append('ID_1') # adding ID to the snps
-    snp_df = snp_df[random_50_snps_withID]
+    random_10_snps_withID = random.sample(snp_cols, 10) # randomly taking 10 snps for testing
+    random_10_snps_withID.append('ID_1') # adding ID to the snps
+    snp_df = snp_df[random_10_snps_withID]
     
     snp_and_clinical_df = pd.merge(snp_df, clinical_df, on='ID_1')
     snp_and_clinical_df.dropna(inplace = True) # drop rows with missing values
+    snp_and_clinical_ohc_df = snp_and_clinical_df.drop(['Chronotype_1.0', 'Sleeplessness/Insomnia_1.0'], axis=1) # dropping these as they're baseline for OHC, not dropping them in place cuz using both of these separately
 
 # init values
-    binOHCdata = snp_and_clinical_df 
+    binOHCdata = snp_and_clinical_ohc_df.drop('PHQ9', axis=1)
+    nonbinOHCdata = snp_and_clinical_ohc_df.drop('PHQ9_binary', axis=1)
+    binOHCdata_withBase = snp_and_clinical_df.drop('PHQ9', axis=1)
     out_folder = '/home/akhan/repo_punks_mete/summer23_aylab/data/'
-    nonbinOHCdata, binnonOHCdata, nonbinnonOHCdata, r_path= None
+    r_path = '/home/akhan/repo_punks_mete/summer23_aylab/Rscripts'
+    binnonOHCdata, nonbinnonOHCdata= None, None
     
 # Create an instance of Stat_Analyzer
     analyzer = Stat_Analyzer(
-        binOHCdata, 
-        nonbinOHCdata, 
+        binOHCdata,  
+        binOHCdata_withBase,
+        nonbinOHCdata,
         binnonOHCdata, 
         nonbinnonOHCdata, 
         r_path, 
@@ -836,10 +793,24 @@ def main():
     
     
     # Run multivariate logistic regression
-    target_variable = "PHQ9_Binary"
-    output_file = "test_multvar_log_reg.csv"
+    target_variable = "PHQ9_binary"
+    output_file = "test_log_reg.csv"
     analyzer.multivariate_logistic_regression(target_variable, output_file)
 
+    # Run multivariate linear regression
+    target_variable = "PHQ9"
+    output_file = "test_lin_reg.csv"
+    analyzer.multivariate_linear_regression(target_variable, output_file)
+
+    # Run association rule learning. We need the baseline for OHC as well, which is why ARL uses the df where we do not drop the baselines: binOHCdata_withBase
+    # not working because we do not have arulesViz package...
+    target_variable = "PHQ9_binary"
+    output_file = "test_ARL"
+    rules = analyzer.association_rule_learning(target=target_variable, out_file=output_file)
+    print(rules)
+    
+    # mediation also needs R...
+    
 # Execute the main function
 if __name__ == "__main__":
     main()
