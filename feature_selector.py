@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import os
+import psutil
 import random
 import time
 import logging
@@ -8,30 +9,84 @@ from skfeature.function.information_theoretical_based import LCSI
 from sklearn.feature_selection import chi2
 from statsmodels.stats.multitest import fdrcorrection
 from sklearn.feature_selection import mutual_info_classif
+from sklearn.utils import resample
 import multiprocessing as mp
 from multiprocessing import Pool
 from shared_objects import SharedNumpyArray, SharedPandasDataFrame
+import mifs
 '''
 This class is meant to be used to do feature selection after you have compiled your
 final dataset. Check an example usage at the end of this file.
 '''
+def compile_snps(snps, factors, dir, out_folder):
+    '''
+    Compile a dataframe of given list of SNPs across all chrom files. Output as .csv.
+
+    Arguments
+        snps -- SET of snps to be compiled.
+        factors -- LIST of fix columns (Sex, ID_1, PHQ9_binary)
+        dir -- directory of chrom files
+        out_file -- folder to output the result
+    '''
+    logging.basicConfig(filename= os.path.join(out_folder, 'compiler.log'), encoding='utf-8', level=logging.DEBUG)
+    files = [file for file in os.listdir(dir) if '.csv' in file]
+    individual_args = [(os.path.join(dir, file), snps, factors) for file in files]
+    
+    with Pool() as pool:
+        results = pool.map(compile_wrapper, individual_args)
+
+    final = pd.concat(results, axis = 1)
+    final = final.loc[:,~final.columns.duplicated()].copy()
+
+    final.to_csv(os.path.join(out_folder, 'compiled_snps.csv'))
+        
+def compile_wrapper(args):
+    '''
+    Used for parallelization in compiling a list of SNPs from all chrom files.
+
+    Arguments:
+        args -- a tuple that should contain two fields
+            args[0] -- path to chrom .csv file
+            args[1] -- set of SNP columns to be compiled
+            args[2] -- list of fix columns (Sex, ID_1, PHQ9_binary)
+    '''
+    logging.info('pid: {}. Working on {}.'.format(os.getpid(), args[0]))
+    df = pd.read_csv(args[0], index_col = 0)
+    snp_set = set(df.columns.tolist())
+    snps_present = args[1].intersection(snp_set)
+    logging.info('pid: {}. Found {} SNPs on {}.'.format(os.getpid(), str(len(snps_present)), args[0]))
+    df.sort_values('ID_1', inplace = True)
+    result = []
+    for snp in snps_present:
+        result.append(df[snp])
+    for col in args[2]:
+        result.append(df[col])
+    return pd.concat(result, axis = 1)
 
 def fs_wrapper(args):
     '''
-    Used for parallelization.
+    Used for parallelization in univariate feature selection.
 
     Arguments:
-        args -- a tuple that should contain four fields
+        args -- a tuple that should contain five fields
             args[0] -- rsid of snp
             args[1] -- feature selection function to be used
             args[2] -- reference to shared df object
             args[3] -- reference to shared target arr object
+            args[4] -- name of feature selection function
     '''
+    start = time.time()
     data = args[2].read()
     target = args[3].read()
     predictor = np.reshape(data[args[0]].to_numpy(), (-1, 1))
     fs_func = args[1]
-    result = fs_func(predictor, target)
+    if args[4] == 'infogain':
+        result = fs_func(predictor, target, random_state = 0)
+    else:
+        result = fs_func(predictor, target)
+    duration = time.time() - start
+    logging.info('CHILD --- pid: {}. Completed a test for {} at {} in {} seconds. Currently using {} MB memory.'
+                 .format(os.getpid(), args[0], time.ctime(), duration, psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2))
     return result, args[0]
 
 def chisquare(data, target, out_name):
@@ -45,33 +100,32 @@ def chisquare(data, target, out_name):
         outname -- name of the file to which the results will be outputted
     '''
     start_time = time.time()
-    logging.info('Started rounds of feature selection at: ' + str(start_time))
+    logging.info('PARENT --- Started rounds of feature selection at: ' + time.ctime())
     target_arr = data[target].to_numpy().astype('int')
     only_snp_data = data.drop(columns = [target, 'ID_1'])
 
     shared_snp_data = SharedPandasDataFrame(only_snp_data)
     shared_target_arr = SharedNumpyArray(target_arr)
     
-    individual_args = [(snp, chi2, shared_snp_data, shared_target_arr) for snp in only_snp_data]
+    individual_args = [(snp, chi2, shared_snp_data, shared_target_arr, 'chi2') for snp in only_snp_data]
 
     parallel_time = time.time()
-    logging.info('Started parallelization of feature selection at: ' + str(parallel_time))
-    logging.info('Overhead to start parallelizing: ' + (str(parallel_time - start_time)))
+    logging.info('PARENT --- Started parallelization of feature selection at: ' + time.ctime())
+    logging.info('PARENT --- Overhead to start parallelizing: ' + (str(parallel_time - start_time)))
     with Pool() as pool:
         results = pool.map(fs_wrapper, individual_args)
     shared_snp_data.unlink()
     shared_target_arr.unlink()
     
     end_time = time.time()
-    logging.info('Stopped parallelization of feature selection at: ' + str(parallel_time))
-    logging.info('Parallelized step took: ' + (str(end_time - parallel_time)))
+    logging.info('PARENT --- Stopped parallelization of feature selection at: ' + time.ctime())
+    logging.info('PARENT --- Parallelized step took: ' + (str(end_time - parallel_time)))
 
     df = pd.DataFrame()
     df["SNP"] = [result[1] for result in results]
     df["chi2_score"] = [result[0][0][0] for result in results]
     df["p_val"] = [result[0][1][0] for result in results]
     df.sort_values(by="chi2_score", inplace=True, ascending = False)
-    df['rank'] = np.arange(0, len(df))
 
     df.to_csv(out_name)
 
@@ -86,32 +140,31 @@ def infogain(data, target, out_name):
         outname -- name of the file to which the results will be outputted
     '''
     start_time = time.time()
-    # logging.info('Started rounds of feature selection at: ' + str(start_time))
+    logging.info('PARENT --- Started rounds of feature selection at: ' + time.ctime())
     target_arr = data[target].to_numpy().astype('int')
     only_snp_data = data.drop(columns = [target, 'ID_1'])
 
     shared_snp_data = SharedPandasDataFrame(only_snp_data)
     shared_target_arr = SharedNumpyArray(target_arr)
     
-    individual_args = [(snp, mutual_info_classif, shared_snp_data, shared_target_arr) for snp in only_snp_data]
+    individual_args = [(snp, mutual_info_classif, shared_snp_data, shared_target_arr, 'infogain') for snp in only_snp_data]
 
     parallel_time = time.time()
-    logging.info('Started parallelization of feature selection at: ' + str(parallel_time))
-    logging.info('Overhead to start parallelizing: ' + (str(parallel_time - start_time)))
+    logging.info('PARENT --- Started parallelization of feature selection at: ' + time.ctime())
+    logging.info('PARENT --- Overhead to start parallelizing: ' + (str(parallel_time - start_time)))
     with Pool() as pool:
         results = pool.map(fs_wrapper, individual_args)
     shared_snp_data.unlink()
     shared_target_arr.unlink()
 
     end_time = time.time()
-    logging.info('Stopped parallelization of feature selection at: ' + str(parallel_time))
-    logging.info('Parallelized step took: ' + (str(end_time - parallel_time)))
+    logging.info('PARENT --- Stopped parallelization of feature selection at: ' + time.ctime())
+    logging.info('PARENT --- Parallelized step took: ' + (str(end_time - parallel_time)))
     
     df = pd.DataFrame()
     df["SNP"] = [result[1] for result in results]
     df["infogain_score"] = [result[0][0] for result in results]
     df.sort_values(by="infogain_score", inplace=True, ascending = False)
-    df['rank'] = np.arange(0, len(df))
     
     df.to_csv(out_name)
 
@@ -141,8 +194,9 @@ def mrmr(data, target, out_name, **kwargs):
     chosen_snps = []
     for index in F:
         chosen_snps.append(list(only_snp_data.columns)[index])
-    df["SNP"] = chosen_snps
-    df['rank'] = np.ones(len(df))
+    df['SNP'] = only_snp_data.columns.tolist()
+    df['mrmr_score'] = np.zeros(len(df))
+    df[df['SNP'].isin(chosen_snps), 'mrmr_score'] = 1
     df.to_csv(out_name)
     
 def jmi(data, target, out_name, **kwargs):
@@ -172,8 +226,9 @@ def jmi(data, target, out_name, **kwargs):
     chosen_snps = []
     for index in F:
         chosen_snps.append(list(only_snp_data.columns)[index])
-    df["SNP"] = chosen_snps
-    df['rank'] = np.ones(len(df))
+    df['SNP'] = only_snp_data.columns.tolist()
+    df['jmi_score'] = np.zeros(len(df))
+    df[df['SNP'].isin(chosen_snps), 'jmi_score'] = 1
     df.to_csv(out_name)
 
 class FeatureSelector():
@@ -196,45 +251,20 @@ class FeatureSelector():
 
         logging.basicConfig(filename= os.path.join(out_folder, 'feature_selector.log'), encoding='utf-8', level=logging.DEBUG)
 
-    def bootstrap(self, n, k, target_column, target_outcome):
+    def bootstrap(self, n_samples = None, stratify_column = None):
         '''
-        Return a n-size list of k-size stratified random samples with replacements.
+        Returns a n_samples size resampling of self.data with replacements, stratified according to stratify_column
 
         Arguments:
-            n -- number of bootstraps
-            k -- number of samples in of each bootstrap. pass -1 for the bootstrap size to be the same as the total sample sizes
-            target_column -- column to check for stratifying
-            target_outcome -- value to check for in target_column
-
-        Returns:
-            bootstraps -- nested list of ID_1's for every bootstrap
+            n_samples -- sample size. pass None to use self.data size
+            stratify_column -- label of column to stratify according to. pass None for no stratifying
         '''
+        if stratify_column is not None:
+            stratify_column = self.data[stratify_column].to_numpy()
+        return resample(self.data, n_samples = n_samples, stratify = stratify_column)
 
-        target_df = self.data[self.data[target_column] == target_outcome]
-        other_df = self.data[self.data[target_column] != target_outcome]
-
-        if k == -1:
-            target_total = len(target_df.index)
-            other_total = len(other_df.index)
-        else:
-            ratio = len(target_df.index) / len(self.data.index)
-            target_total = int(ratio * k)
-            other_total = k - target_total
-        
-        bootstraps = []
-        for i in range(0, n):
-            this_bootstrap = []
-            target_array = list(target_df['ID_1'])
-            target_samples = random.sample(target_array, target_total)
-            this_bootstrap.extend(target_samples)
-            other_array = list(other_df['ID_1'])
-            other_samples = random.sample(other_array, other_total)
-            this_bootstrap.extend(other_samples)
-            bootstraps.append(this_bootstrap)
-
-        return bootstraps
-
-    def load_bootstraps(self, file):
+    @staticmethod 
+    def load_bootstraps(file):
         '''
         Read a list of bootstrap participant ID's from given dataframe, and return it.
         Useful for maintaining the same sample across different runs.
@@ -252,7 +282,7 @@ class FeatureSelector():
             bootstraps.append(df[col].tolist())
         return bootstraps
 
-    def get_sample(self, ids):
+    def get_sample_from_ids(self, ids):
         '''
         Return a dataframe containing the participants with given list of ids
 
@@ -262,34 +292,55 @@ class FeatureSelector():
         Returns:
             sample -- slice from self.data containing participants with given ids
         '''
-        result = pd.DataFrame(columns = self.data.columns)
+        rows = []
         for id in ids:
-            result = pd.concat([result, self.data[self.data['ID_1'] == id]])
-        return result
+            rows.append(self.data.loc[self.data['ID_1'] == id])
+        return pd.concat(rows)
 
-    def bootstrapped_feat_select(self, n, k, target_column, target_outcome, selectors, selector_names, out_name):
+    def bootstrapped_feat_select(
+        self, 
+        n_bootstraps,
+        n_samples,
+        stratify_column, 
+        selectors, 
+        selector_names, 
+        out_name, 
+        bootstraps = None,
+    ):
         '''
         Bootstraps the dataset, applies feature selection with specified functions.
         Compiles results across all and outputs them as a .csv file.
 
         Arguments:
-            n -- number of bootstraps
-            k -- number of samples in each bootstrap
-            target_column -- column to check for stratifying
-            target_outcome -- value to check for in target_column
-            selectors -- list of functions to use for feature selection. n % len(selectors) should be 0,
-                and every selector will be applied equal times. you can repeat selectors in list to manipulate this
+            n_bootstraps -- number of bootstraps. ignored if bootstraps is not None.
+            n_samples -- number of samples in each bootstrap. ignored if bootstraps is not None.
+            stratify_column -- column label to use for feature selection and stratifying the bootstrap.
+            selectors -- list of functions to use for feature selection. 
             selector_names -- list of function names that will be used to name subdirectories.
             out_name -- name of subdirectories and compiled results file that will be created
+            bootstraps -- list of lists of ID_1's for each bootstrap sample. used to maintain same sample across different runs
         ''' 
         if len(selectors) != len(selector_names):
             raise Exception('Selector list must be as long as selector name list')
 
-        bootstraps = self.bootstrap(n, k, target_column, target_outcome)
-        filenames = []
+        if bootstraps is not None:
+            n_bootstraps = len(bootstraps)
 
-        for i in range(len(bootstraps)):
-            sample = self.get_sample(bootstraps[i])
+        filenames = []
+        bootstrap_export = []
+        logging.info('PARENT --- Parent process is using {} MB of memory.'.format(psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2))
+
+        for i in range(n_bootstraps):
+            start = time.time()
+            logging.info('PARENT --- Trying to create a bootstrap sample.')
+            if bootstraps is not None:
+                this_sample = self.get_sample_from_ids(bootstraps[i])
+                bootstrap_export.append(bootstraps[i])
+                logging.info('PARENT --- Loaded sample from provided bootstrap in {} seconds'.format(str(time.time() - start)))
+            else:
+                this_sample = self.bootstrap(n_samples = n_samples, stratify_column = stratify_column)
+                bootstrap_export.append(this_sample['ID_1'].tolist())
+                logging.info('PARENT --- Created new in {} seconds'.format(str(time.time() - start)))
             for j in range(len(selectors)):
                 function = selectors[j]
                 selector_folder = os.path.join(self.out_folder, out_name + '_' + selector_names[j])
@@ -297,16 +348,18 @@ class FeatureSelector():
                     os.makedirs(selector_folder)
                     logging.info('made a folder ' + selector_folder)
                 filename = os.path.join(selector_folder, selector_names[j] + '_' + str(i) + '.csv')
-                function(sample, target_column, filename)
+                logging.info('PARENT --- Started {} at {}'.format(selector_names[j], time.ctime()))
+                start = time.time()
+                function(this_sample, stratify_column, filename)
+                logging.info('PARENT --- Finished {} at {}. That took{}'.format(selector_names[j], time.ctime(), str(time.time() - start)))
                 filenames.append(filename)
 
         final = pd.DataFrame()
         snps = pd.read_csv(filenames[0])['SNP']
         final['SNP'] = snps
-        final['total_chi2'] = np.zeros(len(snps))
-        final['total_infogain'] = np.zeros(len(snps))
-        final['nan_chi2'] = np.zeros(len(snps))
-        final['nan_infogain'] = np.zeros(len(snps))
+        for name in selector_names:
+            final['total_' + name] = np.zeros(len(snps))
+            final['nan_' + name] = np.zeros(len(snps))
         for file in filenames:
             curr_file = pd.read_csv(file)
             if 'chi2' in file:
@@ -317,6 +370,14 @@ class FeatureSelector():
                 total_column = 'total_infogain'
                 nan_column = 'nan_infogain'
                 target_column = 'infogain_score'
+            elif 'mrmr' in file:
+                total_column = 'total_mrmr'
+                nan_column = 'nan_mrmr'
+                target_column = 'mrmr_score'
+            elif 'jmi' in file:
+                total_column = 'total_jmi'
+                nan_column = 'nan_jmi'
+                target_column = 'jmi_score'
             for snp in final['SNP']:
                 result = curr_file.loc[curr_file['SNP'] == snp, target_column]
                 if result.isna().item():
@@ -324,15 +385,14 @@ class FeatureSelector():
                 else:
                     final.loc[final['SNP'] == snp, total_column] += curr_file.loc[curr_file['SNP'] == snp, target_column].item()
                     
-        
-        final['average_chi2'] = final['total_chi2'] / ((final['nan_chi2'] * -1) + n)
-        final['average_infogain'] = final['total_infogain'] / ((final['nan_infogain'] * -1) + n)
+        for name in selector_names:
+            final['average_' + name] = final['total_' + name] / ((final['nan_' + name] * -1) + n_bootstraps)
         final.to_csv(os.path.join(self.out_folder, out_name + '.csv'))
 
         bootstrap_df = pd.DataFrame()
-        for i in range(len(bootstraps)):
+        for i in range(len(bootstrap_export)):
             name = 'bootstrap_' + str(i + 1)
-            bootstrap_df[name] = bootstraps[i]
+            bootstrap_df[name] = bootstrap_export[i]
 
         bootstrap_df.to_csv(os.path.join(self.out_folder, out_name + '_bootstraps.csv'))
             

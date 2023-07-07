@@ -219,19 +219,19 @@ class DataLoader():
         if use_list:
             rsids = self.rsids
 
-        rows = []
-        indices = []
-
-        if get_alleles:
-            alleles = []
-            minor_alleles = []
-
         for i in range(len(chroms)):
             current_chrom = chroms[i]
             current_intervals = intervals[i]
 
             if current_chrom in ignore or current_chrom not in keep:
                 continue
+
+            rows = []
+            indices = []
+    
+            if get_alleles:
+                alleles = []
+                minor_alleles = []
 
             if use_list:
                 current_rsids = set(rsids[i]) # again, make this a set to save some time
@@ -324,12 +324,12 @@ class DataLoader():
         chroms = self.chroms
         intervals = self.intervals
 
-        rows = []
-        indices = []
-
         for i in range(len(chroms)):
             current_chrom = chroms[i]
             current_intervals = intervals[i] # the intervals we need to check for this chromosome
+
+            rows = []
+            indices = []
             
             print('Checking chromosome {} with delay parsing...'.format(str(current_chrom)))
             bfile = bf(os.path.join(self.genetics_folder, self.genetics_format.format(str(current_chrom))), delay_parsing = True)
