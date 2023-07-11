@@ -18,7 +18,7 @@ import mifs
 This class is meant to be used to do feature selection after you have compiled your
 final dataset. Check an example usage at the end of this file.
 '''
-def compile_snps(snps, factors, dir, out_folder):
+def compile_snps(snps, factors, dir, out):
     '''
     Compile a dataframe of given list of SNPs across all chrom files. Output as .csv.
 
@@ -28,7 +28,7 @@ def compile_snps(snps, factors, dir, out_folder):
         dir -- directory of chrom files
         out_file -- folder to output the result
     '''
-    logging.basicConfig(filename= os.path.join(out_folder, 'compiler.log'), encoding='utf-8', level=logging.DEBUG)
+    logging.basicConfig(filename= os.path.join(os.path.dirname(out), 'compiler.log'), encoding='utf-8', level=logging.DEBUG)
     files = [file for file in os.listdir(dir) if '.csv' in file]
     individual_args = [(os.path.join(dir, file), snps, factors) for file in files]
     
@@ -38,7 +38,7 @@ def compile_snps(snps, factors, dir, out_folder):
     final = pd.concat(results, axis = 1)
     final = final.loc[:,~final.columns.duplicated()].copy()
 
-    final.to_csv(os.path.join(out_folder, 'compiled_snps.csv'))
+    final.to_csv(os.path.join(out))
         
 def compile_wrapper(args):
     '''
@@ -57,10 +57,15 @@ def compile_wrapper(args):
     logging.info('pid: {}. Found {} SNPs on {}.'.format(os.getpid(), str(len(snps_present)), args[0]))
     df.sort_values('ID_1', inplace = True)
     result = []
+    sum_na = 0
     for snp in snps_present:
+        this_na = df[snp].isna().sum()
+        sum_na += this_na
+        logging.info('{} has {} NaN values'.format(snp, str(this_na)))
         result.append(df[snp])
     for col in args[2]:
         result.append(df[col])
+    logging.info('{} has {} NaN in total out of {}'.format(os.path.basename(args[0]), str(sum_na), len(df.index)))
     return pd.concat(result, axis = 1)
 
 def fs_wrapper(args):
@@ -74,11 +79,16 @@ def fs_wrapper(args):
             args[2] -- reference to shared df object
             args[3] -- reference to shared target arr object
             args[4] -- name of feature selection function
+    Returns:
+        result -- whatever is returned from passed feat select function
+        args[0] -- rsid of snp
+        frequency -- how many times this snp appeared in the population
     '''
     start = time.time()
     data = args[2].read()
     target = args[3].read()
     predictor = np.reshape(data[args[0]].to_numpy(), (-1, 1))
+    frequency = data[args[0]].value_counts()[1]
     fs_func = args[1]
     if args[4] == 'infogain':
         result = fs_func(predictor, target, random_state = 0)
@@ -87,9 +97,9 @@ def fs_wrapper(args):
     duration = time.time() - start
     logging.info('CHILD --- pid: {}. Completed a test for {} at {} in {} seconds. Currently using {} MB memory.'
                  .format(os.getpid(), args[0], time.ctime(), duration, psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2))
-    return result, args[0]
+    return result, args[0], frequency
 
-def chisquare(data, target, out_name):
+def chisquare(data, target, out_name, kwargs):
     '''
     Runs parallelized chi-square feature selection on the data and the target values. Outputs
     results to a .csv at given path
@@ -125,11 +135,12 @@ def chisquare(data, target, out_name):
     df["SNP"] = [result[1] for result in results]
     df["chi2_score"] = [result[0][0][0] for result in results]
     df["p_val"] = [result[0][1][0] for result in results]
+    df['frequency'] = [result[2] for result in results]
     df.sort_values(by="chi2_score", inplace=True, ascending = False)
 
     df.to_csv(out_name)
 
-def infogain(data, target, out_name):
+def infogain(data, target, out_name, kwargs):
     '''
     Runs infogain feature selection on the data and the target values. Outputs
     results to a .csv at given path
@@ -164,11 +175,12 @@ def infogain(data, target, out_name):
     df = pd.DataFrame()
     df["SNP"] = [result[1] for result in results]
     df["infogain_score"] = [result[0][0] for result in results]
+    df['frequency'] = [result[2] for result in results]
     df.sort_values(by="infogain_score", inplace=True, ascending = False)
     
     df.to_csv(out_name)
 
-def mrmr(data, target, out_name, **kwargs):
+def mrmr(data, target, out_name, kwargs):
     '''
     Applies MRMR feature selection on the data and target values. Outputs
     results to a .csv at given path
@@ -185,21 +197,39 @@ def mrmr(data, target, out_name, **kwargs):
     data_arr = only_snp_data.to_numpy()
     
     if 'n_selected_features' in kwargs.keys():
+        logging.info('Yay this did print!')
         n_selected_features = kwargs['n_selected_features']
         F, J_CMI, MIfy= LCSI.lcsi(data_arr, target_arr, gamma=0, function_name='MRMR', n_selected_features=n_selected_features)
     else:   
+        logging.info('This shouldn\'t print')
         F, J_CMI, MIfy = LCSI.lcsi(data_arr, target_arr, gamma=0, function_name='MRMR')
-        
+
+    logging.info('MRMR --- Chosen indices are: {}'.format(F))
+    logging.info('MRMR --- Therefore, chosen SNPs are: '.format(only_snp_data.columns[F]))
+    df = pd.DataFrame()
+    df['SNP'] = only_snp_data.columns.tolist()
+    df['mrmr_score'] = 0
+    df.reset_index(drop = True, inplace = True)
+    df.loc[F, 'mrmr_score'] = 1
+    df.to_csv(out_name)
+
+def mrmr_parallel(data, target, out_name, kwargs):
+    target_arr = data[target].to_numpy().astype('int')
+    only_snp_data = data.drop(columns = [target, 'ID_1'])
+    data_arr = only_snp_data.to_numpy()
+
+    feat_selector = mifs.MutualInformationFeatureSelector(method = 'MRMR')
+    feat_selector.fit(data_arr,  target_arr)
     df = pd.DataFrame()
     chosen_snps = []
     for index in F:
         chosen_snps.append(list(only_snp_data.columns)[index])
     df['SNP'] = only_snp_data.columns.tolist()
-    df['mrmr_score'] = np.zeros(len(df))
+    df['mrmr_score'] = np.zeros(len(df)).tolist()
     df[df['SNP'].isin(chosen_snps), 'mrmr_score'] = 1
     df.to_csv(out_name)
     
-def jmi(data, target, out_name, **kwargs):
+def jmi(data, target, out_name, kwargs):
     '''
     Applies MRMR feature selection on the data and target values. Outputs
     results to a .csv at given path
@@ -211,24 +241,26 @@ def jmi(data, target, out_name, **kwargs):
     ---------
     Brown, Gavin et al. "Conditional Likelihood Maximisation: A Unifying Framework for Information Theoretic Feature Selection." JMLR 2012.
     '''
+
     target_arr = data[target].to_numpy().astype('int')
     only_snp_data = data.drop(columns = [target, 'ID_1'])
     data_arr = only_snp_data.to_numpy()
     
     if 'n_selected_features' in kwargs.keys():
+        logging.info('Yay this did print!')
         n_selected_features = kwargs['n_selected_features']
         F, J_CMI, MIfy = LCSI.lcsi(data_arr, target_arr, function_name='JMI', n_selected_features=n_selected_features)
     else:
+        logging.info('This shouldn\'t print!')
         F, J_CMI, MIfy = LCSI.lcsi(data_arr, target_arr, function_name='JMI')
-    return
 
+    logging.info('JMI --- Chosen indices are: {}'.format(F))
+    logging.info('JMI --- Therefore, chosen SNPs are: '.format(only_snp_data.columns[F]))
     df = pd.DataFrame()
-    chosen_snps = []
-    for index in F:
-        chosen_snps.append(list(only_snp_data.columns)[index])
     df['SNP'] = only_snp_data.columns.tolist()
-    df['jmi_score'] = np.zeros(len(df))
-    df[df['SNP'].isin(chosen_snps), 'jmi_score'] = 1
+    df['jmi_score'] = 0
+    df.reset_index(drop = True, inplace = True)
+    df.loc[F, 'jmi_score'] = 1
     df.to_csv(out_name)
 
 class FeatureSelector():
@@ -303,7 +335,8 @@ class FeatureSelector():
         n_samples,
         stratify_column, 
         selectors, 
-        selector_names, 
+        selector_names,
+        selector_kwargs,
         out_name, 
         bootstraps = None,
     ):
@@ -317,11 +350,15 @@ class FeatureSelector():
             stratify_column -- column label to use for feature selection and stratifying the bootstrap.
             selectors -- list of functions to use for feature selection. 
             selector_names -- list of function names that will be used to name subdirectories.
+            selector_kwargs -- list of dictionaries for kwargs to pass into selector functions
             out_name -- name of subdirectories and compiled results file that will be created
             bootstraps -- list of lists of ID_1's for each bootstrap sample. used to maintain same sample across different runs
         ''' 
         if len(selectors) != len(selector_names):
             raise Exception('Selector list must be as long as selector name list')
+
+        if len(selectors) != len(selector_kwargs):
+            raise Exception('Selector list must be as long as selector kwargs list')
 
         if bootstraps is not None:
             n_bootstraps = len(bootstraps)
@@ -350,8 +387,8 @@ class FeatureSelector():
                 filename = os.path.join(selector_folder, selector_names[j] + '_' + str(i) + '.csv')
                 logging.info('PARENT --- Started {} at {}'.format(selector_names[j], time.ctime()))
                 start = time.time()
-                function(this_sample, stratify_column, filename)
-                logging.info('PARENT --- Finished {} at {}. That took{}'.format(selector_names[j], time.ctime(), str(time.time() - start)))
+                function(this_sample, stratify_column, filename, selector_kwargs[j])
+                logging.info('PARENT --- Finished {} at {}. That took {}'.format(selector_names[j], time.ctime(), str(time.time() - start)))
                 filenames.append(filename)
 
         final = pd.DataFrame()
