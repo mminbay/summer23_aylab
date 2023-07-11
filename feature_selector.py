@@ -88,7 +88,7 @@ def fs_wrapper(args):
     data = args[2].read()
     target = args[3].read()
     predictor = np.reshape(data[args[0]].to_numpy(), (-1, 1))
-    frequency = data[args[0]].value_counts()[1]
+    frequency = len(data.index) - data[args[0]].value_counts()[0]
     fs_func = args[1]
     if args[4] == 'infogain':
         result = fs_func(predictor, target, random_state = 0)
