@@ -26,6 +26,8 @@ import re
 import os
 from ast import literal_eval
 
+import logging
+
 '''
 This file is meant to be used for classification. An example usage can be found at the end of this file.
 '''
@@ -109,17 +111,9 @@ class MyClassifier(BaseEstimator, ClassifierMixin):
     @ignore_warnings(category=ConvergenceWarning)
     def fit(self, X, y):
         #X,y = SMOTE(random_state=42).fit_resample(X,y)
-
-        f_name = os.path.join(self.path, 'results', 'features', self.method + '_final.txt')
-        with open(f_name, 'r') as f:
-            index = np.array([float(field) for field in f.read().split()]).astype(int)
-
-        self.idx = index
-        X = X[:,self.idx]
         return self.classify.fit(X,y)
 
     def predict(self, X, y=None):
-        X = X[:,self.idx]
         return self.classify.predict(X)
 
     def score(self, X, y, sample_weight=None):
@@ -158,8 +152,10 @@ class ClassifierHelper():
         '''
         self.data = data
         self.out_folder = out_folder
-        if not os.exists(out_folder):
+        if not os.path.exists(out_folder):
             os.makedirs(out_folder)
+
+        logging.basicConfig(filename= os.path.join(out_folder, 'classifiers.log'), encoding='utf-8', level=logging.DEBUG)
 
 
     @staticmethod
@@ -231,36 +227,35 @@ class ClassifierHelper():
         '''
         X = self.data.drop(columns = ['ID_1', target_column]).to_numpy()
         y = self.data[target_column].to_numpy()
+
+        logging.info('Attempting classification for {} with {}: {} runs of {}-fold cross-validation.'.format(target_column, classifier, n_runs, n_folds))
         
         c_path = os.path.join(self.out_folder, 'results', 'classifiers')
-        f_path = os.path.join(self.out_folder, 'results', 'features')
         r_path = os.path.join(self.out_folder, 'results', 'hyperparams_runs')
 
         if not os.path.exists(c_path):
             os.makedirs(c_path)
-        if not os.path.exists(f_path):
-            os.makedirs(f_path)
         if not os.path.exists(r_path):
             os.makedirs(r_path)
 
-        train_validation_path = os.path.join(c_path, c+'_'+fs+"train_validation.txt")
-        train_test_path = os.path.join(c_path, c+'_'+fs+"train_test.txt")
+        train_validation_path = os.path.join(c_path, classifier + '_' + method +"_train_validation.txt")
+        train_test_path = os.path.join(c_path, classifier + '_' + method + "_train_test.txt")
         open(train_validation_path, 'w').close()
         open(train_test_path, 'w').close()
 
         for i in range(n_runs):
-            result_path = r_path + '_' + c + "_" + method + '_run_' + str(i + 1) + ".txt"
+            result_path = os.path.join(r_path, classifier + "_" + method + '_run_' + str(i + 1) + ".txt")
             open(result_path, "w").close() 
-            print('currently running: ' + c + ' with ' + method + ' repeat ' + str(i+1))
+            print('currently running: ' + classifier + ' with ' + method + ' repeat ' + str(i+1))
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, random_state=i+40)
-            _pipeline = make_pipeline(MyClassifier(estimator = classifier, method = method, splits = n_folds, path = self.out_folder, run = i+1))
+            _pipeline = make_pipeline(MyClassifier(estimator = classifier, method = method, splits = n_folds, path = self.out_folder, run = i + 1))
             cv = StratifiedKFold(n_splits=n_folds, random_state=i+40, shuffle= True)
 
-            parms, itr = getParameters(c)
+            parms, itr = ClassifierHelper.getParameters(classifier)
             parms = {'myclassifier__' + key: parms[key] for key in parms}
 
             grid_imba = BayesSearchCV(_pipeline, search_spaces=parms, cv=cv, n_iter=itr, refit = False, n_jobs=-1, n_points=3)
-            grid_imba.fit(X_train.values, y_train.values)
+            grid_imba.fit(X_train, y_train)
             best = grid_imba.best_params_
 
             bestParam = dict()
@@ -292,32 +287,26 @@ class ClassifierHelper():
             trainVal.close()
 
             
-            if c == 'rdforest':
+            if classifier == 'rdforest':
                 Tester = RandomForestClassifier(**bestParam)
-            elif c == 'logreg':
+            elif classifier == 'logreg':
                 Tester = LogisticRegression(**bestParam, max_iter=10000)
-            elif c == 'elasticnet':
+            elif classifier == 'elasticnet':
                 Tester = SGDClassifier(**bestParam, loss = 'log_loss', penalty = 'l1')
-            elif c == 'naiveBayes':
+            elif classifier == 'naiveBayes':
                 Tester = BernoulliNB(**bestParam)
-            elif c == 'knn':
+            elif classifier == 'knn':
                 Tester = KNeighborsClassifier(**bestParam)
-            elif c == 'LDA':
+            elif classifier == 'LDA':
                 Tester = sk.LinearDiscriminantAnalysis(**bestParam)
-            elif c == 'svm':
+            elif classifier == 'svm':
                 Tester = SVC(**bestParam, random_state=0, max_iter=10000000)
-            elif c == 'xgboost':
+            elif classifier == 'xgboost':
                 Tester = XGBClassifier(**bestParam, use_label_encoder = False)
 
-            X_t, y_t = X_train.values, y_train.values
+            X_t, y_t = X_train, y_train
             if balance_data:
                 X_t, y_t = SMOTE(random_state=42).fit_resample(X_t, y_t)
-            
-            f_name = os.path.join(f_path, method + '_final.txt')
-            with open(fname, 'r') as f:
-                index = np.array([float(field) for field in f.read().split()]).astype(int)
-            X_t = X_t[:, index]
-            X_test = X_test.values[:, index]
 
             Tester.fit(X_t, y_t)
             yp = Tester.predict(X_test)

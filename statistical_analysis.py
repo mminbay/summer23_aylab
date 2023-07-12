@@ -13,14 +13,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from statsmodels.genmod.generalized_linear_model import GLM, SET_USE_BIC_LLF
 from statsmodels.genmod import families
-# from rpy2.robjects.packages import importr
-# from rpy2.robjects import r, pandas2ri, numpy2ri
-# numpy2ri.activate()
-# from rpy2.robjects.conversion import localconverter
-# import rpy2.robjects as ro
+from rpy2.robjects.packages import importr
+from rpy2.robjects import r, pandas2ri, numpy2ri
+numpy2ri.activate()
+from rpy2.robjects.conversion import localconverter
+import rpy2.robjects as ro
 import itertools
-# from utilities import relabel  # hardcoded. relabel functional will be updated when anova needed
-# from data_processor import data_processor  # this is not being used
+from utilities import relabel  # hardcoded. relabel functional will be updated when anova needed
 from scipy.stats import sem
 from scipy import stats
 import random
@@ -177,7 +176,6 @@ class Stat_Analyzer():
         fig.savefig(os.path.join(indep_folder, 'oneWayANOVA_boxPlot.png'))
         plt.close()
         
-
         #Create a bar plot
 
         sns.set(rc = {'figure.figsize':(15,10)})
@@ -586,23 +584,27 @@ class Stat_Analyzer():
             indep = t
         
         for var in indep:
-            current_var = str(var) + '-' + str(med) + '-' + str(dep) + '.txt'
-            result_file = os.path.join(result_folder, current_var)
+            current_var_file = str(var) + '-' + str(med) + '-' + str(dep) + '.txt'
+            result_file = os.path.join(result_folder, current_var_file)
 
-            l1 = importr('mediation')
-            formulaMake = r['as.formula']
-            mediate, lm, glm, summary, capture = r['mediate'], r['lm'], r['glm'], r['summary'], r['capture.output']
+            # l1 = importr('mediation')
+            # formulaMake = r['as.formula']
+            # mediate, lm, glm, summary, capture = r['mediate'], r['lm'], r['glm'], r['summary'], r['capture.output']
 
-            MediationFormula = formulaMake(mediator + ' ~ ' + var)
-            OutcomeFormula = formulaMake(dep + ' ~ ' + var + ' + ' + mediator)
+            # MediationFormula = formulaMake(mediator + ' ~ ' + var)
+            # OutcomeFormula = formulaMake(dep + ' ~ ' + var + ' + ' + mediator)
+            mediation_formula = mediator + ' ~ ' + var
+            outcome_formula = dep + ' ~ ' + var + ' + ' + mediator
 
-            with localconverter(ro.default_converter + pandas2ri.converter):
-                data = ro.conversion.py2rpy(data)
+            # with localconverter(ro.default_converter + pandas2ri.converter):
+            #     data = ro.conversion.py2rpy(data)
 
             if med in continuous:
-                modelM = lm(MediationFormula, data) 
+                # modelM = lm(MediationFormula, data)
+                model_m = sm.OLS.from_formula(mediation_formula, data)
+                
             else:
-                modelM = glm(MediationFormula, data = data, family = "binomial")
+                modelM = sm.GLM(MediationFormula, data = data, family = "binomial")
             
             if dep in continuous:
                 modelY = lm(OutcomeFormula, data)
@@ -643,15 +645,12 @@ class Stat_Analyzer():
             out_file -- name of output .txt file (no extension required)
         '''
         data = self.binOHCdata_withBase.copy(deep=True)
-        data.columns = data.columns.str.replace(' ', '_')
-        data.columns = data.columns.str.replace('.', '_')
 
+        data.drop(columns = continuous, inplace=True)
         # remove all columns with more than 2 unique values -- this ensures all features are binarized
         for col in data.columns:
             if len(data[col].unique()) > 2:
                 data.drop([col], axis=1, inplace=True)
-            
-        data.drop(continuous, axis=1, inplace=True)
             
         result_folder = os.path.join(self.out_folder, 'association_rule_learning')
         if not os.path.exists(result_folder):
@@ -659,30 +658,31 @@ class Stat_Analyzer():
             
         if protective:
             data[target] = np.absolute(np.array(data[target].values) - 1)
-            
-        apriori_path = os.path.join(result_folder, out_file + '_apriori.csv')
-        data.to_csv(apriori_path) # tmp file for Python code to work with
 
         # Generate association rules using mlxtend
         if protective:
             rules = apriori(data, min_support=min_support, use_colnames=True)
             rules = association_rules(rules, metric="lift", min_threshold=min_lift)
-            rules = rules[rules['consequents'].astype(str).str.contains(target)]
         else:
             rules = apriori(data, min_support=min_support, use_colnames=True)
             rules = association_rules(rules, metric="lift", min_threshold=min_lift)
-
+            
+        rules = rules[rules['consequents'].astype(str).str.contains(target)]
         # Filter rules based on length
         rules = rules[(rules['antecedents'].apply(lambda x: len(x)) >= min_items) &
                     (rules['antecedents'].apply(lambda x: len(x)) <= max_items)]
+
+        rules = rules[rules["consequents"].astype(str).str.contains(target)]
+        rules["antecedents"] = rules["antecedents"].apply(lambda x: ', '.join(list(x))).astype("unicode")
+        rules["consequents"] = rules["consequents"].apply(lambda x: ', '.join(list(x))).astype("unicode")
 
         # Sort rules by lift
         rules = rules.sort_values(by='lift', ascending=False)
 
         if rules.empty:
             print('No association rules found.')
-        else:
-            return rules
+
+        rules.to_csv(os.path.join(self.out_folder, 'association_rule_learning', 'arl_results{}.csv'.format('_protective' if protective else '')))
     
     def multivariate_linear_regression(self, target, out_file = 'mvlin.csv'):
         '''
@@ -690,7 +690,7 @@ class Stat_Analyzer():
         Saves results as a .csv file with given name
         '''
         y_train = self.nonbinOHCdata[target]
-        x_train_sm = sm.add_constant(self.nonbinOHCdata.drop(columns = [target]))
+        x_train_sm = sm.add_constant(self.nonbinOHCdata.drop(columns = [target, 'ID_1']))
 
         logm2 = sm.GLM(y_train, x_train_sm, family=sm.families.Binomial())
         res = logm2.fit()
@@ -701,9 +701,8 @@ class Stat_Analyzer():
         Runs multivariate regression on binarized, OHC data for given target variable.
         Saves results as a .csv file with given name
         '''
-        self.binOHCdata.drop(['ID_1'], axis=1, inplace=True)
         y_train = self.binOHCdata[target]
-        x_train_sm = sm.add_constant(self.binOHCdata.drop(columns = [target]))
+        x_train_sm = sm.add_constant(self.binOHCdata.drop(columns = [target, 'ID_1']))
 
         logm2 = sm.GLM(y_train, x_train_sm, family=sm.families.Binomial())
         res = logm2.fit()
@@ -756,58 +755,45 @@ class Stat_Analyzer():
 # Testing the code, doesn't work rn, have to update
 def main():
 
-# getting and formatting a test file for log regression
-    clinical_df = pd.read_csv("/datalake/AyLab/depression_testing/depression_data_ohc.csv", index_col = 0)
-    clinical_df.drop(['Sex', 'Age'], axis=1, inplace=True)
-    snp_df = pd.read_csv("/datalake/AyLab/depression_snp_data/FAULTY_dominant_model/dominant_depression_allsnps_6000extra_c1.csv", index_col = 0, nrows = 1000)
-    snp_df.drop(['PHQ9_binary', 'Sex'], axis=1, inplace=True) # dropping phq9_binary cuz clinical already has it
-    all_cols = snp_df.columns.tolist()
-    snp_cols = [col for col in all_cols if col not in ['ID_1']]
-    random_10_snps_withID = random.sample(snp_cols, 10) # randomly taking 10 snps for testing
-    random_10_snps_withID.append('ID_1') # adding ID to the snps
-    snp_df = snp_df[random_10_snps_withID]
-    
-    snp_and_clinical_df = pd.merge(snp_df, clinical_df, on='ID_1')
-    snp_and_clinical_df.dropna(inplace = True) # drop rows with missing values
-    snp_and_clinical_ohc_df = snp_and_clinical_df.drop(['Chronotype_1.0', 'Sleeplessness/Insomnia_1.0'], axis=1) # dropping these as they're baseline for OHC, not dropping them in place cuz using both of these separately
+    # getting and formatting a test file for log regression
+    data = pd.read_csv("/home/mminbay/summer_research/summer23_aylab/data/dom_overall/analysis_data.csv", index_col = 0).dropna().drop(columns = ['Age', 'Sex'])
+    bin_nonOHC = data.drop(columns = ['PHQ9'])
+    cont_nonOHC = data.drop(columns = ['PHQ9_binary'])
+    bin_OHC_dropbase = pd.get_dummies(bin_nonOHC, columns = ['Sleeplessness/Insomnia', 'Chronotype'], drop_first = True)
+    bin_OHC_withbase = pd.get_dummies(bin_nonOHC, columns = ['Sleeplessness/Insomnia', 'Chronotype'], drop_first = False)
+    cont_OHC = pd.get_dummies(cont_nonOHC, columns = ['Sleeplessness/Insomnia', 'Chronotype'])
 
-# init values
-    binOHCdata = snp_and_clinical_ohc_df.drop('PHQ9', axis=1)
-    nonbinOHCdata = snp_and_clinical_ohc_df.drop('PHQ9_binary', axis=1)
-    binOHCdata_withBase = snp_and_clinical_df.drop('PHQ9', axis=1)
-    out_folder = '/home/akhan/repo_punks_mete/summer23_aylab/data/'
-    r_path = '/home/akhan/repo_punks_mete/summer23_aylab/Rscripts'
-    binnonOHCdata, nonbinnonOHCdata= None, None
+    out_folder = '/home/mminbay/summer_research/summer23_aylab/data/dom_overall/analysis/'
+    r_path = '/home/mminbay/summer_research/summer23_aylab/Rscripts'
     
-# Create an instance of Stat_Analyzer
+    # Create an instance of Stat_Analyzer
     analyzer = Stat_Analyzer(
-        binOHCdata,  
-        binOHCdata_withBase,
-        nonbinOHCdata,
-        binnonOHCdata, 
-        nonbinnonOHCdata, 
+        bin_OHC_dropbase,  
+        bin_OHC_withbase,
+        cont_OHC,
+        bin_nonOHC, 
+        cont_nonOHC, 
         r_path, 
         out_folder
     )
 
-    
-    
     # Run multivariate logistic regression
-    target_variable = "PHQ9_binary"
-    output_file = "test_log_reg.csv"
-    analyzer.multivariate_logistic_regression(target_variable, output_file)
+    # target_variable = 'PHQ9_binary'
+    # output_file = 'test_log_reg.csv'
+    # analyzer.multivariate_logistic_regression(target_variable, output_file)
 
     # Run multivariate linear regression
-    target_variable = "PHQ9"
-    output_file = "test_lin_reg.csv"
-    analyzer.multivariate_linear_regression(target_variable, output_file)
+    # target_variable = 'PHQ9'
+    # output_file = "test_lin_reg.csv"
+    # analyzer.multivariate_linear_regression(target_variable, output_file)
 
     # Run association rule learning. We need the baseline for OHC as well, which is why ARL uses the df where we do not drop the baselines: binOHCdata_withBase
     # not working because we do not have arulesViz package...
-    target_variable = "PHQ9_binary"
-    output_file = "test_ARL"
-    rules = analyzer.association_rule_learning(target=target_variable, out_file=output_file)
-    print(rules)
+    # target_variable = "PHQ9_binary"
+    # output_file = "test_ARL"
+    # rules = analyzer.association_rule_learning(target_variable, out_file=output_file, continuous = ['TSDI'], protective = True)
+
+    analyzer.mediation_analysis('PHQ9', 'Chronotype_1.0', [col for col in data.columns.tolist() if col not in ['Age', 'Sex', 'ID_1', 'Chronotype_1.0', 'PHQ9_binary']], ['TSDI'])
     
     # mediation also needs R...
     
