@@ -21,10 +21,10 @@ class DataLoader():
     ):
         '''
         Arguments:
-        genetics_folder -- where this instace will look for .bgen files (imputed genetic info)
-        genetics_format -- name format for .bgen files, where {} will be replaced by chromosome number. note the data field 
-        imputed_ids_path -- path to the .csv file which contains the participant id's in the same order as they appear in the .bgen files
-        out_folder -- where this instance will write files to
+        genetics_folder (str) -- path to the directory where this instance will look for .bgen files (imputed genetic info)
+        genetics_format (str) -- name format for .bgen files, where {} will be replaced by chromosome number. note the data field 
+        imputed_ids_path (str) -- path to the .csv file which contains the participant id's in the same order as they appear in the .bgen files
+        out_folder (str) -- path tho the directory where this instance will write files to
         '''
         self.genetics_folder = genetics_folder
         self.genetics_format = genetics_format
@@ -59,11 +59,11 @@ class DataLoader():
         Reads given .txt file and stores list of chroms and rsids as instance variables
         
         Arguments:
-            file -- Path to the .txt file containing the SNP information. The .txt file should have the format <chrom_number>, <rsid> for every line
+            file (str) -- path to the .txt file containing the SNP information. The .txt file should have the format <chrom_number>, <rsid> for every line
     
         Modified instance variables:
-            chroms -- list of chromosomes 
-            rsids -- nested list of rsids on each chromosome. rsids[i] is the list of SNPs on the chroms[i] chromosome.
+            self.chroms (list(int)) -- list of chromosomes 
+            self.rsids (list(list(str))) -- nested list of rsids on each chromosome. rsids[i] is the list of SNPs of chroms[i].
         '''
         chroms, rsids = [], []
         prev_chrom, idx = -1, -1
@@ -90,12 +90,11 @@ class DataLoader():
         Reads given .txt file and stores list of chroms and intervals as instance variables
         
         Arguments:
-            file -- Path to the .txt file containing the interval information. The .txt file should have the format <chrom_number>, <interval_start>-<interval_end>
-        for every line
+            file (str) -- path to the .txt file containing the interval information. the file should have the format <chrom_number>, <interval_start>-<interval_end> for every line
     
         Modified instance variables:
-            chroms -- list of chromosomes 
-            intervals -- nested list of intervals on each chromosome. intervals[i] is the list of intervals on the chroms[i] chromosome.
+            self.chroms (list(int)) -- list of chromosomes 
+            intervals (list(list(str))) -- nested list of intervals on each chromosome. intervals[i] is the list of intervals of chroms[i].
         '''
         chroms, intervals = [], []
         prev_chrom, idx = -1, -1
@@ -120,10 +119,11 @@ class DataLoader():
     # TODO: refactor to work with self.tables
     def get_nonimputed_from_rsids(self):
         '''
+        NOT SUPPORTED! WILL BE UPDATED
         Uses ukbb_parser to get non-imputed genetic information on stored rsids and chroms
     
         Returns:
-        df -- a dataframe containing non-imputed SNP information, where column 'ID_1' is ukbb participant id
+            df (DataFrame) -- dataset of non-imputed SNP information, where column 'ID_1' is ukbb participant id
         '''
         chroms = self.chroms
         rsids = self.rsids
@@ -147,6 +147,7 @@ class DataLoader():
     # TODO: refactor to work with self.tables
     def get_imputed_from_rsids(self):
         '''
+        NOT SUPPORTED! WILL BE UPDATED
         Uses bgen.reader to get imputed genetic information on stored rsids and chroms. Save results into separate .csv for each chromosome
         '''
         chroms = self.chroms
@@ -182,7 +183,8 @@ class DataLoader():
         extra = 6000,
         keep = range(1, 23),
         ignore = [],
-        threshold = 0.0,
+        n_threshold = 0,
+        freq_threshold = 0.0,
         table_name = 'imputed_{}',
         export = True,
         keep_track_as = 'path',
@@ -190,22 +192,23 @@ class DataLoader():
         get_alleles = False
     ):
         '''
+        TODO: Fix threshold to work with KEPT SAMPLE ONLY
         Uses bgen.reader to get imputed genetic information on stored rsids and chroms only for the ID_1s on given dataframe.
         Saves results into separate .csv for each chromosome.
 
         Arguments:
-            data -- path to .csv file containing the ID_1's to use
-            extra -- number of base pairs subtracted from interval starts and added to interval ends to stretch search intervals
-            keep -- chromosomes to keep, where the rest will be ignored. useful for splitting the chromosomes into multiple runs
-            ignore -- chromosome's to ignore. useful for running multiple runs
-            threshold -- frequency threshold to keep track of snps. snps rarer than this threshold will be discarded
-            table_name -- name format for dataframe for each chromosome, where {} will be chromosome number. will also be used for .csv export file names
-            export -- whether each chromosome dataframe should be exported on their own as well
-            keep_track_as ('path', 'table', '') -- how this instance will store each chromosome data in self.tables. pass empty string for no storing.
-                note that 'path' option is useless if file isn't being exported. don't do table if you are doing multiple chromosomes
-            use_list -- if True, only get information on rsids that have been provided. you need to call both load_chroms_and_rsids AND load_chroms_and_intervals
+            data (str) -- path to .csv file containing the ID_1's to use. the file should have an ID_1 column
+            extra (int) -- number of base pairs subtracted from interval starts and added to interval ends to stretch search intervals
+            keep (list(int)) -- chromosomes to keep. chromosomes not present in this list will be ignored
+            ignore (list(int)) -- chromosome's to ignore. chromosomes in this list will be ignored.
+            n_threshold (int) -- SNPs that appear in less than this many people will be discarded.
+            freq_threshold (float) -- SNPs that appear in less than this ratio of the population will be discarded.
+            table_name (str) -- name format for dataframe for each chromosome, where {} will be chromosome number. will also be used for .csv export file names
+            export (bool) -- if True, output the data of each chromosome on its own as a .csv (keep True)
+            keep_track_as ('path', 'table', '') -- how this instance will store each chromosome data in self.tables. pass empty string for no storing. note that 'path' option is useless if file isn't being exported. don't do table if you are doing multiple chromosomes
+            use_list (bool) -- if True, only get information on rsids that have been provided. you need to call both load_chroms_and_rsids AND load_chroms_and_intervals, and the chroms, intervals, and lists should obviously have no conflicting information.
                 for this to work properly, and both sources should obviously have the same chromosomes.
-            get_alleles -- if True, will output an additional .csv file that contains the allele information for all snps that have been recorded
+            get_alleles (bool) -- if True, will output an additional .csv file that contains the allele information for all snps that have been recorded
         '''
         ids_to_keep = set(pd.read_csv(data, usecols = ['ID_1'])['ID_1'].tolist()) # this takes way too long if you don't make it a set
         all_ids = pd.read_csv(self.imputed_ids_path, usecols = ['ID_1'])['ID_1'].tolist()
@@ -276,7 +279,7 @@ class DataLoader():
                             sum_snp += 1
                         if all_ids[j] in ids_to_keep:
                             row.append(probabilities[j].argmax())
-                    if sum_snp / sum_all < threshold:
+                    if sum_snp / sum_all < freq_threshold or sum_snp < n_threshold:
                         continue
                     rows.append(row)
 
@@ -304,20 +307,20 @@ class DataLoader():
 
     def getImputedGeneticInformationFromIntervals(
         self, 
-        extra = 5000, 
+        extra = 6000, 
         table_name = 'imputed_{}',
         export = True,
         keep_track_as = 'path'
     ):
         '''
+        NOT SUPPORTED! WILL BE UPDATED
         Uses bgen.reader to get imputed genetic information on stored chroms and intervals.
 
         Arguments:
-        extra -- number of base pairs subtracted from interval starts and added to interval ends to stretch search intervals
-        table_name -- name format for dataframe for each chromosome, where {} will be chromosome number. will also be used for .csv export file names
-        export -- whether each chromosome dataframe should be exported on their own as well
-        keep_track_as ('path', 'table', '') -- how this instance will store each chromosome data in self.tables. pass empty string for no storing.
-            note that 'path' option is useless if file isn't being exported.
+            extra (int) -- number of base pairs subtracted from interval starts and added to interval ends to stretch search intervals
+            table_name (str) -- name format for dataframe for each chromosome, where {} will be chromosome number. will also be used for .csv export file names
+            export (bool) -- if True, output the data of each chromosome on its own as a .csv (keep True)
+            keep_track_as ('path', 'table', '') -- how this instance will store each chromosome data in self.tables. pass empty string for no storing. note that 'path' option is useless if file isn't being exported.
         '''
 
         # if someone is refactoring this code please use a better bgen module, half the functions in this one do not even work
@@ -357,32 +360,6 @@ class DataLoader():
             if keep_track_as == 'table':
                 self.tables[formatted_name] = df
 
-    def dominant_model(self, data):
-        '''
-        Relabel given dataframe's SNP info according to dominant model. Assumes all and only SNP columns start with 'rs'
-
-        Arguments:
-        data -- dataframe to be relabeled. changes are made in place
-        '''
-        snp_pattern = re.compile('rs.*')
-        snp_cols = [col for col in list(data.columns) if snp_pattern.match(col)]
-        for snp in snp_cols:
-            temp = data[snp]
-            data[snp] = [0 if i == 0 else 1 for i in temp]
-
-    def recessive_model(self, data):
-        '''
-        Relabel given dataframe's SNP info according to recessive model. Assumes all and only SNP columns start with 'rs'
-
-        Arguments:
-        data -- dataframe to be relabeled. changes are made in place
-        '''
-        snp_pattern = re.compile('rs.*')
-        snp_cols = [col for col in list(data.columns) if snp_pattern.match(col)]
-        for snp in snp_cols:
-            temp = data[snp]
-            data[snp] = [1 if i == 2 else 0 for i in temp]
-
     def one_hot_encode(self, data, columns):
         '''
         One-hot encode the given columns on the given dataframe. Returns OHC encoded dataframe
@@ -403,8 +380,8 @@ class DataLoader():
         Uses ukbb_parser to create a PHQ9 dataset with given columns. Stores created dataset in self.tables
     
         Arguments:
-        table_name -- the key with which this table will be stored in self.tables
-        binary_cutoff -- used to calculate the PHQ9_binary column, where total PHQ9 scores greater than this cutoff are considered depressed
+            table_name (str) -- the key with which this table will be stored in self.tables
+            binary_cutoff (int) -- used to calculate the PHQ9_binary column, where total PHQ9 scores greater than this cutoff are considered depressed
         '''
         test = [
             ("Recent changes in speed/amount of moving or speaking", 20518, "continuous"),
@@ -455,16 +432,15 @@ class DataLoader():
         fields["ID_1"] = eid
         self.tables[table_name] = fields
         
-    def create_41270_table(self, table_name, values, export = True):
+    def create_41270_table(self, table_name, values):
         '''
         Uses ukbb_parser to find participant ID's which have any of given codings on their 41270 field.
-        This dataframe will only have 1 column 'ID_1'.
+        Outputs two .csv files as a result: one with a single column of ID_1's of samples with queried values, and another with the entire set of unfiltered results
 
         Arguments:
-            table_name -- the key with which this table will be stored in self.tables
-            values -- list of values that will be looked for in the 41270 fields. a participant's outcome will be 
+            table_name (str) -- the key with which this table will be stored in self.tables, and the name of the output .csv files
+            values (list(str)) -- list of values that will be looked for in the 41270 fields. a participant's outcome will be 
                 labeled 1 if they have any of these values, 0 otherwise
-            export -- whether the resulting dataframes should be exported on their own
         '''
         eid, fields, _ = create_dataset(
             [('41270 fields', 41270, 'raw')],
@@ -484,8 +460,8 @@ class DataLoader():
         Uses ukbb_parser to create a dataset with given columns. Stores created dataset in self.tables
     
         Arguments:
-        table_name = the key with which this table will be stored in self.tables
-        columns -- list of tuples of the format ('field name', ukbb_field_number, 'data type')
+            table_name (str) -- the key with which this table will be stored in self.tables
+            columns (list(tuple)) -- list of tuples of the format ('field name', ukbb_field_number, 'data type')
         '''
         eid, fields, _ = create_dataset(
             columns,
@@ -496,28 +472,16 @@ class DataLoader():
         to_drop = []
         for column, _, _ in columns:
             to_drop.append(column)
-        # self.__drop(fields, to_drop)
         self.tables[table_name] = fields
-
-    # TODO: implement properly
-    def create_ICD10_table(self, table_name, columns):
-        '''
-        Uses ukbb_parser to create a dataset with given columns AND ICD10 results. Stores tree and phenotype table in self.tables
-        '''
-        eid, ICD10_tree, fields, _, _ = create_ICD10_dataset(
-            parse_dataset_covariates_kwargs={"use_genotyping_metadata": False}
-        )
-        ICD10_tree.to_csv('/home/mminbay/summer_research/summer23_aylab/data/test.csv')
-        
 
     def load_table(self, table_name, table_path, delay_parsing = False):
         '''
         Read the .csv file given at table_path and store it at self.tables
 
         Arguments:
-        table_name -- the key with which this table will be stored in self.tables
-        table_path -- path to .csv file
-        delay_parsing -- if True, save the path instead of dataframe object and only open .csv when in use.
+            table_name (str) -- the key with which this table will be stored in self.tables
+            table_path (str) -- path to .csv file
+            delay_parsing (bool) -- if True, save the path instead of dataframe object and only open .csv when in use.
         '''
         if delay_parsing:
             self.tables[table_name] = table_path
@@ -529,10 +493,10 @@ class DataLoader():
         Return table that is identified with the key 'table_name' in self.tables
 
         Arguments:
-        table_name -- the key with which the table is stored in self.tables
+            table_name (str) -- the key with which the table is stored in self.tables
 
         Returns:
-        table -- the table with the given table_name
+            table (DataFrame) -- the table with the given table_name
         '''
 
         return self.tables[table_name]
@@ -540,6 +504,12 @@ class DataLoader():
     def merge_all(self, on_col = 'ID_1'):
         '''
         Merge all stored dataframes on given column, and return it.
+
+        Arguments:
+            on_col (str) -- column identifier to merge the tables on. unless you really tampered with the code, this is 'ID_1'
+
+        Returns:
+            final_table (DataFrame) -- merged dataset of all tables stored in self.tables
         '''
         table_list = list(self.tables.values())
         if len(table_list) == 0:
@@ -557,40 +527,20 @@ class DataLoader():
         self.__drop(final_table, final_table.columns)
         return final_table
 
-    # TODO: refactor to work with only given set of table names
-    def export(self, data, out = 'export.csv', drop = [], ohc = [], model = 'd'):
+    @staticmethod
+    def export_four_way(
+        data,
+        bin_outcome,
+        cont_outcome,
+        ohe,
+        out_name,
+        out_folder
+    ):
         '''
-        Merge stored tables on given column and save as .csv at given path. 
-
-        Arguments:
-        data -- dataframe to export
-        out -- name of output file
-        drop -- list of columns to drop. useful for maintaining a single outcome column per dataframe (check export_all). pass empty string for no drop
-        ohc -- list of variables to one hot encode. pass empty list for no encoding
-        model ('d', 'r') -- d for dominant model, r for recessive model
+        TO BE IMPLEMENTED
+        Export provided dataset in four formats (binary outcome, continuous outcome) x (one-hot-encoded, non-ohe) as separate .csv files
         '''
-        
-        if len(drop) > 0:
-            data.drop(columns = drop)
-        if len(ohc) > 0:
-            data = self.one_hot_encode(final_table, ohc)
-
-        if model.equals('d'):
-            self.dominant_model(data)
-        elif model.equals('r'):
-            self.recessive_model(data)
-
-        data.to_csv(os.path.join(self.out_folder, out))
-
-    def export_all(self, ohc, filename = 'result', binary_outcome = 'PHQ9_binary', continuous_outcome = 'PHQ9', model = 'd'):
-        '''
-        Merge all stored dataframes. Export 4 dataframes (OHC, non-OHC) * (binary outcome, continuous outcome)
-        '''
-        final_table = self.merge_all()
-        self.export(final_table, out = filename + '_OHC_binary.csv', drop = [continuous_outcome], ohc = ohc, model = 'd')
-        self.export(final_table, out = filename + '_OHC_continuous.csv', drop = [binary_outcome], ohc = [], model = 'd')
-        self.export(final_table, out = filename + '_noOHC_binary.csv', drop = [continuous_outcome], ohc = [], model = 'd')
-        self.export(final_table, out = filename + '_noOHC_continuous.csv', drop = [binary_outcome], ohc = ohc, model = 'd')
+        pass
 
 '''
 Below is an example usage

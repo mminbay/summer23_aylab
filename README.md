@@ -89,6 +89,8 @@ $ wget  -nd  biobank.ndph.ox.ac.uk/ukb/util/gfetch
 Since you might want to organize your `data` folder as you wish, there is a `.env.example` provided in this repository. Set the environment variables as appropriate and rename the file to `.env` to make it usable.
 
 ## Usage
+### Unhandled Features
+
 ### `load_data.py`
 This file defines the `DataLoader` class, which is meant to help you compile a final dataset from your phenotype data and genetic data.  
 * 

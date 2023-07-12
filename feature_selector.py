@@ -13,7 +13,6 @@ from sklearn.utils import resample
 import multiprocessing as mp
 from multiprocessing import Pool
 from shared_objects import SharedNumpyArray, SharedPandasDataFrame
-import mifs
 '''
 This class is meant to be used to do feature selection after you have compiled your
 final dataset. Check an example usage at the end of this file.
@@ -23,10 +22,10 @@ def compile_snps(snps, factors, dir, out):
     Compile a dataframe of given list of SNPs across all chrom files. Output as .csv.
 
     Arguments
-        snps -- SET of snps to be compiled.
-        factors -- LIST of fix columns (Sex, ID_1, PHQ9_binary)
-        dir -- directory of chrom files
-        out_file -- folder to output the result
+        snps (set(str)) -- set of snps to be compiled.
+        factors (list(str)) -- LIST of fix columns (Sex, ID_1, PHQ9_binary)
+        dir (str) -- path to directory of chrom files. this directory should only contain .csv files of the chroms
+        out_file (str) -- path to folder to output the result
     '''
     logging.basicConfig(filename= os.path.join(os.path.dirname(out), 'compiler.log'), encoding='utf-8', level=logging.DEBUG)
     files = [file for file in os.listdir(dir) if '.csv' in file]
@@ -45,10 +44,10 @@ def compile_wrapper(args):
     Used for parallelization in compiling a list of SNPs from all chrom files.
 
     Arguments:
-        args -- a tuple that should contain two fields
-            args[0] -- path to chrom .csv file
-            args[1] -- set of SNP columns to be compiled
-            args[2] -- list of fix columns (Sex, ID_1, PHQ9_binary)
+        args (tuple) -- a tuple that should contain two fields
+            args[0] (str) -- path to chrom .csv file
+            args[1] (set(str)) -- set of SNP columns to be compiled
+            args[2] (list(str)) -- list of fix columns (Sex, ID_1, PHQ9_binary)
     '''
     logging.info('pid: {}. Working on {}.'.format(os.getpid(), args[0]))
     df = pd.read_csv(args[0], index_col = 0)
@@ -73,22 +72,22 @@ def fs_wrapper(args):
     Used for parallelization in univariate feature selection.
 
     Arguments:
-        args -- a tuple that should contain five fields
-            args[0] -- rsid of snp
-            args[1] -- feature selection function to be used
-            args[2] -- reference to shared df object
-            args[3] -- reference to shared target arr object
-            args[4] -- name of feature selection function
+        args (tuple) -- a tuple that should contain five fields
+            args[0] (str) -- rsid of snp
+            args[1] (function) -- feature selection function to be used
+            args[2] (shared_objects.SharedPandasDataFrame) -- reference to shared df object
+            args[3] (shared_objects.SharedNumpyArray) -- reference to shared target arr object
+            args[4] (str) -- name of feature selection function
     Returns:
-        result -- whatever is returned from passed feat select function
-        args[0] -- rsid of snp
-        frequency -- how many times this snp appeared in the population
+        result (any) -- whatever is returned from passed feat select function
+        args[0] (str) -- rsid of snp
+        frequency (int) -- how many times this snp appeared in the population
     '''
     start = time.time()
     data = args[2].read()
     target = args[3].read()
     predictor = np.reshape(data[args[0]].to_numpy(), (-1, 1))
-    frequency = len(data.index) - data[args[0]].value_counts()[0]
+    frequency = len(data) - data[args[0]].value_counts()[0]
     fs_func = args[1]
     if args[4] == 'infogain':
         result = fs_func(predictor, target, random_state = 0)
@@ -105,9 +104,9 @@ def chisquare(data, target, out_name, kwargs):
     results to a .csv at given path
 
     Arguments:
-        data -- dataset (in DataFrame type)
-        target -- target column label in dataset
-        outname -- name of the file to which the results will be outputted
+        data (DataFrame) -- dataset
+        target (str) -- target column label in dataset
+        out_name (str) -- path where the results will be outputted
     '''
     start_time = time.time()
     logging.info('PARENT --- Started rounds of feature selection at: ' + time.ctime())
@@ -146,9 +145,9 @@ def infogain(data, target, out_name, kwargs):
     results to a .csv at given path
 
     Arguments:
-        data -- dataset (in DataFrame type)
-        target -- target column label in dataset
-        outname -- name of the file to which the results will be outputted
+        data (DataFrame) -- dataset
+        target (str) -- target column label in dataset
+        outname (str) -- path where the results will be outputted
     '''
     start_time = time.time()
     logging.info('PARENT --- Started rounds of feature selection at: ' + time.ctime())
@@ -186,9 +185,9 @@ def mrmr(data, target, out_name, kwargs):
     results to a .csv at given path
 
     Arguments:
-        data -- dataset (in DataFrame type)
-        target -- target column label in dataset
-        outname -- name of the file to which the results will be outputted
+        data (DataFrame) -- dataset
+        target (str) -- target column label in dataset
+        outname (str) -- path where the results will be outputted
     ---------
     Brown, Gavin et al. "Conditional Likelihood Maximisation: A Unifying Framework for Information Theoretic Feature Selection." JMLR 2012.
     '''
@@ -235,9 +234,9 @@ def jmi(data, target, out_name, kwargs):
     results to a .csv at given path
 
     Arguments:
-        data -- dataset (in DataFrame type)
-        target -- target column label in dataset
-        outname -- name of the file to which the results will be outputted
+        data (DataFrame) -- dataset
+        target (str) -- target column label in dataset
+        outname (str) -- path where the results will be outputted
     ---------
     Brown, Gavin et al. "Conditional Likelihood Maximisation: A Unifying Framework for Information Theoretic Feature Selection." JMLR 2012.
     '''
@@ -272,8 +271,8 @@ class FeatureSelector():
     ):
         '''
         Arguments:
-            data -- dataset (DataFrame) that contains features and target. should only contain features that will undergo feature selection, the ID_1 column, and the target column
-            out_folder -- where this instance will write files to
+            data (DataFrame) -- dataset that contains features and target. should only contain features that will undergo feature selection, the ID_1 column, and the target column
+            out_folder (str) -- path of directory where this instance will output files (created if non-existent)
         '''
         self.data = data
         self.out_folder = out_folder
@@ -288,8 +287,11 @@ class FeatureSelector():
         Returns a n_samples size resampling of self.data with replacements, stratified according to stratify_column
 
         Arguments:
-            n_samples -- sample size. pass None to use self.data size
-            stratify_column -- label of column to stratify according to. pass None for no stratifying
+            n_samples (int) -- sample size. pass None to use self.data size
+            stratify_column (str) -- label of column to stratify according to. pass None for no stratifying
+
+        Returns:
+            result (DataFrame) -- dataframe that is resampled from self.data
         '''
         if stratify_column is not None:
             stratify_column = self.data[stratify_column].to_numpy()
@@ -302,11 +304,11 @@ class FeatureSelector():
         Useful for maintaining the same sample across different runs.
 
         Arguments:
-            file -- path to the .csv file containing the bootstraps, where every column
+            file (str) -- path to the .csv file containing the bootstraps, where every column
                 should be a list of ID_1's for a bootstrap.
 
         Returns:
-            bootstraps -- nested list of ID_1's for every bootstrap
+            bootstraps (list(list(int))) -- nested list of ID_1's for every bootstrap
         '''
         bootstraps = []
         df = pd.read_csv(file, index_col = 0)
@@ -319,10 +321,10 @@ class FeatureSelector():
         Return a dataframe containing the participants with given list of ids
 
         Arguments:
-            ids -- list of ID_1's (can have repetitions)
+            ids (list(int)) -- list of ID_1's (can have repetitions)
 
         Returns:
-            sample -- slice from self.data containing participants with given ids
+            sample (DataFrame) -- sample from self.data containing participants with given ids
         '''
         rows = []
         for id in ids:
@@ -345,14 +347,14 @@ class FeatureSelector():
         Compiles results across all and outputs them as a .csv file.
 
         Arguments:
-            n_bootstraps -- number of bootstraps. ignored if bootstraps is not None.
-            n_samples -- number of samples in each bootstrap. ignored if bootstraps is not None.
-            stratify_column -- column label to use for feature selection and stratifying the bootstrap.
-            selectors -- list of functions to use for feature selection. 
-            selector_names -- list of function names that will be used to name subdirectories.
-            selector_kwargs -- list of dictionaries for kwargs to pass into selector functions
-            out_name -- name of subdirectories and compiled results file that will be created
-            bootstraps -- list of lists of ID_1's for each bootstrap sample. used to maintain same sample across different runs
+            n_bootstraps (int) -- number of bootstraps. ignored if bootstraps is not None.
+            n_samples (int) -- number of samples in each bootstrap. ignored if bootstraps is not None.
+            stratify_column (str) -- column label to use for feature selection and stratifying the bootstrap.
+            selectors (list(function)) -- list of functions to use for feature selection. 
+            selector_names (list(str)) -- list of function names that will be used to name subdirectories.
+            selector_kwargs (list(dict(str: any))) -- list of dictionaries for kwargs to pass into selector functions
+            out_name (str) -- name of subdirectories and compiled results file that will be created
+            bootstraps (list(list(int))) -- if not None, use this to create samples instead of creating new random samples
         ''' 
         if len(selectors) != len(selector_names):
             raise Exception('Selector list must be as long as selector name list')
@@ -421,7 +423,7 @@ class FeatureSelector():
                     final.loc[final['SNP'] == snp, nan_column] += 1
                 else:
                     final.loc[final['SNP'] == snp, total_column] += curr_file.loc[curr_file['SNP'] == snp, target_column].item()
-                    
+        final
         for name in selector_names:
             final['average_' + name] = final['total_' + name] / ((final['nan_' + name] * -1) + n_bootstraps)
         final.to_csv(os.path.join(self.out_folder, out_name + '.csv'))
