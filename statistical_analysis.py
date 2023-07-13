@@ -5,6 +5,8 @@ from linearmodels.iv import IV2SLS
 import pandas as pd
 import statsmodels
 import statsmodels.api as sm
+import statsmodels.genmod.families.links as links
+from statsmodels.stats.mediation import Mediation
 import bioinfokit.analys
 from mne.stats import fdr_correction
 import researchpy as rp
@@ -568,10 +570,15 @@ class Stat_Analyzer():
             dep -- dependent variable, or outcome label of your study
             med -- mediator variable
             indep -- independent variable, or list of independent variables
-            continuous -- list of continuous 
+            continuous -- list of continuous variables
             sims -- i don't even know
         '''
         data = self.nonbinOHCdata.copy(deep = True)
+        data.columns = data.columns.str.replace(' ', '_')
+        data.columns = data.columns.str.replace('.', '_')
+
+        med = med.replace('.', '_').replace(' ', '_')
+        dep = dep.replace('.', '_').replace(' ', '_')
 
         result_folder = os.path.join(self.out_folder, 'mediation_analysis')
 
@@ -583,7 +590,8 @@ class Stat_Analyzer():
             t = list(); t.append(indep)
             indep = t
         
-        for var in indep:
+        for i in range(len(indep)):
+            var = indep[i].replace('.', '_').replace(' ', '_')
             current_var_file = str(var) + '-' + str(med) + '-' + str(dep) + '.txt'
             result_file = os.path.join(result_folder, current_var_file)
 
@@ -593,28 +601,35 @@ class Stat_Analyzer():
 
             # MediationFormula = formulaMake(mediator + ' ~ ' + var)
             # OutcomeFormula = formulaMake(dep + ' ~ ' + var + ' + ' + mediator)
-            mediation_formula = mediator + ' ~ ' + var
-            outcome_formula = dep + ' ~ ' + var + ' + ' + mediator
+            mediation_formula = med + ' ~ ' + var
+            outcome_formula = dep + ' ~ ' + var + ' + ' + med
+            print('Med formula = {}'.format(mediation_formula))
+            print('Dep formula = {}'.format(outcome_formula))
 
             # with localconverter(ro.default_converter + pandas2ri.converter):
             #     data = ro.conversion.py2rpy(data)
 
+            probit = links.probit
             if med in continuous:
                 # modelM = lm(MediationFormula, data)
                 model_m = sm.OLS.from_formula(mediation_formula, data)
-                
             else:
-                modelM = sm.GLM(MediationFormula, data = data, family = "binomial")
+                # modelM = glm(MediationFormula, data = data, family = "binomial")           
+                model_m = sm.GLM.from_formula(mediation_formula, data, family=sm.families.Binomial(link=probit()))
             
             if dep in continuous:
-                modelY = lm(OutcomeFormula, data)
+                # modelY = lm(OutcomeFormula, data)
+                model_y = sm.OLS.from_formula(outcome_formula, data)
             else:
-                modelY = glm(OutcomeFormula, data = data, family = "binomial")
+                # modelY = glm(OutcomeFormula, data = data, family = "binomial")
+                model_y = sm.GLM.from_formula(outcome_formula, data, family=sm.families.Binomial(link=probit()))
             
-            results = mediate(modelM, modelY, treat=var, mediator=mediator,sims=sims)
-            dfR = summary(results)
-            self.mediation['results'] = dfR
-            capture(dfR, file = result_file)
+            # results = mediate(modelM, modelY, treat=var, mediator=mediator,sims=sims)
+            # dfR = summary(results)
+            # self.mediation['results'] = dfR
+            # capture(dfR, file = result_file)
+            med = Mediation(model_y, model_m, var, med).fit()
+            print(med.summary())
 
     # ARL below was written mostly by chatgpt, so we may have to check for errors. doesn't use R. refer to cole's code for the old version
     def association_rule_learning(
@@ -692,7 +707,7 @@ class Stat_Analyzer():
         y_train = self.nonbinOHCdata[target]
         x_train_sm = sm.add_constant(self.nonbinOHCdata.drop(columns = [target, 'ID_1']))
 
-        logm2 = sm.GLM(y_train, x_train_sm, family=sm.families.Binomial())
+        logm2 = sm.GLM(y_train, x_train_sm, family=sm.families.Gaussian())
         res = logm2.fit()
         self.display_regression_results(x_train_sm.columns, res, out_file)
     
@@ -765,7 +780,7 @@ def main():
 
     out_folder = '/home/mminbay/summer_research/summer23_aylab/data/dom_overall/analysis/'
     r_path = '/home/mminbay/summer_research/summer23_aylab/Rscripts'
-    
+
     # Create an instance of Stat_Analyzer
     analyzer = Stat_Analyzer(
         bin_OHC_dropbase,  
@@ -793,7 +808,7 @@ def main():
     # output_file = "test_ARL"
     # rules = analyzer.association_rule_learning(target_variable, out_file=output_file, continuous = ['TSDI'], protective = True)
 
-    analyzer.mediation_analysis('PHQ9', 'Chronotype_1.0', [col for col in data.columns.tolist() if col not in ['Age', 'Sex', 'ID_1', 'Chronotype_1.0', 'PHQ9_binary']], ['TSDI'])
+    analyzer.mediation_analysis('PHQ9', 'Chronotype_1.0', 'rs540730450', ['TSDI', 'PHQ9'])
     
     # mediation also needs R...
     
