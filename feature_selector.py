@@ -42,6 +42,7 @@ def compile_snps(snps, factors, dir, out):
         
 def compile_wrapper(args):
     '''
+    DO NOT CALL DIRECTLY
     Used for parallelization in compiling a list of SNPs from all chrom files.
 
     Arguments:
@@ -70,6 +71,7 @@ def compile_wrapper(args):
 
 def fs_wrapper(args):
     '''
+    DO NOT CALL DIRECTLY
     Used for parallelization in univariate feature selection.
 
     Arguments:
@@ -96,8 +98,8 @@ def fs_wrapper(args):
         zero_vector = target[np.where(data[args[0]] == 0)]
         one_vector = target[np.where(data[args[0]] == 1)]
         if len(zero_vector) == 0 or len(one_vector) == 0:
-            u1 = np.inf
-            u2 = np.inf
+            u1 = np.nan
+            u2 = np.nan
             p = np.nan
         else:
             u1, p = mannwhitneyu(zero_vector, one_vector)
@@ -112,6 +114,7 @@ def fs_wrapper(args):
 
 def chisquare(data, target, out_name, kwargs):
     '''
+    DO NOT CALL DIRECTLY
     Runs parallelized chi-square feature selection on the data and the target values. Outputs
     results to a .csv at given path
 
@@ -147,12 +150,13 @@ def chisquare(data, target, out_name, kwargs):
     df["chi2_score"] = [result[0][0][0] for result in results]
     df["p_val"] = [result[0][1][0] for result in results]
     df['frequency'] = [result[2] for result in results]
-    df.sort_values(by="chi2_score", inplace=True, ascending = False)
+    # df.sort_values(by="chi2_score", inplace=True, ascending = False)
 
     df.to_csv(out_name)
 
 def infogain(data, target, out_name, kwargs):
     '''
+    DO NOT CALL DIRECTLY
     Runs infogain feature selection on the data and the target values. Outputs
     results to a .csv at given path
 
@@ -187,12 +191,13 @@ def infogain(data, target, out_name, kwargs):
     df["SNP"] = [result[1] for result in results]
     df["infogain_score"] = [result[0][0] for result in results]
     df['frequency'] = [result[2] for result in results]
-    df.sort_values(by="infogain_score", inplace=True, ascending = False)
+    # df.sort_values(by="infogain_score", inplace=True, ascending = False)
     
     df.to_csv(out_name)
 
 def mann_whitney_u(data, target, out_name, kwargs):
     '''
+    DO NOT CALL DIRECTLY
     Runs infogain feature selection on the data and the target values. Outputs
     results to a .csv at given path
 
@@ -227,15 +232,16 @@ def mann_whitney_u(data, target, out_name, kwargs):
     df["SNP"] = [result[1] for result in results]
     df["mwu_1"] = [result[0][0] for result in results]
     df["mwu_2"] = [result[0][1] for result in results]
-    df["u_min"] = [min(result[0][0], result[0][1]) for result in results]
+    df["mwu_score"] = [min(result[0][0], result[0][1]) for result in results]
     df["p_val"] = [result[0][2] for result in results]
     df['frequency'] = [result[2] for result in results]
-    df.sort_values(by="u_min", inplace=True)
+    # df.sort_values(by="u_min", inplace=True)
     
     df.to_csv(out_name)
 
 def mrmr(data, target, out_name, kwargs):
     '''
+    DO NOT CALL DIRECTLY
     Applies MRMR feature selection on the data and target values. Outputs
     results to a .csv at given path
 
@@ -266,25 +272,10 @@ def mrmr(data, target, out_name, kwargs):
     df.reset_index(drop = True, inplace = True)
     df.loc[F, 'mrmr_score'] = 1
     df.to_csv(out_name)
-
-def mrmr_parallel(data, target, out_name, kwargs):
-    target_arr = data[target].to_numpy().astype('int')
-    only_snp_data = data.drop(columns = [target, 'ID_1'])
-    data_arr = only_snp_data.to_numpy()
-
-    feat_selector = mifs.MutualInformationFeatureSelector(method = 'MRMR')
-    feat_selector.fit(data_arr,  target_arr)
-    df = pd.DataFrame()
-    chosen_snps = []
-    for index in F:
-        chosen_snps.append(list(only_snp_data.columns)[index])
-    df['SNP'] = only_snp_data.columns.tolist()
-    df['mrmr_score'] = np.zeros(len(df)).tolist()
-    df[df['SNP'].isin(chosen_snps), 'mrmr_score'] = 1
-    df.to_csv(out_name)
     
 def jmi(data, target, out_name, kwargs):
     '''
+    DO NOT CALL DIRECTLY
     Applies MRMR feature selection on the data and target values. Outputs
     results to a .csv at given path
 
@@ -337,6 +328,35 @@ class FeatureSelector():
 
         logging.basicConfig(filename= os.path.join(out_folder, 'feature_selector.log'), encoding='utf-8', level=logging.DEBUG)
 
+    def frequency_map(self, ignore):
+        '''
+        Count SNP frequency for self.data.
+
+        Arguments:
+            ignore (list(str)) -- column labels to ignore while counting frequencies. usually this should be ['ID_1', 'PHQ9_binary'] ('PHQ9' for cont. outcome)
+
+        Returns:
+            freq_map (dict(str: int)) -- map where SNP identifiers are keys and frequencies are values
+        '''
+        only_snp_data = self.data.drop(columns = ignore)
+        freq_map = {col: only_snp_data[col].sum() for col in only_snp_data}
+        return freq_map
+
+    @staticmethod
+    def frequency_mask(data, threshold, freq_map):
+        '''
+        Hide SNPs from dataframe that have less than the desired frequency.
+
+        Arguments:
+            threshold (int) -- SNPs with frequency less than or equal to this will not be included in the returned dataset
+            ignore (list(str)) -- column labels to ignore while counting frequencies. usually this should be ['ID_1', 'PHQ9_binary'] ('PHQ9' for cont. outcome)
+
+        Returns:
+            data (DataFrame) -- a view of self.data with infrequent SNPs removed
+        '''
+        cols_to_drop = [snp for snp in freq_map if freq_map[snp] <= threshold]
+        return data.drop(columns = cols_to_drop)
+        
     def bootstrap(self, n_samples = None, stratify_column = None):
         '''
         Returns a n_samples size resampling of self.data with replacements, stratified according to stratify_column
@@ -387,14 +407,16 @@ class FeatureSelector():
         return pd.concat(rows)
 
     def bootstrapped_feat_select(
-        self, 
+        self,
+        freq_threshold,
         n_bootstraps,
         n_samples,
         stratify_column, 
         selectors, 
         selector_names,
         selector_kwargs,
-        out_name, 
+        out_name,
+        k_best = None,
         bootstraps = None,
     ):
         '''
@@ -403,6 +425,7 @@ class FeatureSelector():
 
         Arguments:
             n_bootstraps (int) -- number of bootstraps. ignored if bootstraps is not None.
+            freq_threshold (int) -- SNPs that appear less than this number in self.data will not be included in feature selection
             n_samples (int) -- number of samples in each bootstrap. ignored if bootstraps is not None.
             stratify_column (str) -- column label to use for feature selection and stratifying the bootstrap.
             selectors (list(function)) -- list of functions to use for feature selection. 
@@ -420,9 +443,17 @@ class FeatureSelector():
         if bootstraps is not None:
             n_bootstraps = len(bootstraps)
 
+        if k_best is None:
+            k_best = n_bootstraps - 1
+
+        if k_best > n_bootstraps:
+            raise Exception('Cannot pick {} best scores out of {} bootstraps'.format(k_best, n_bootstraps))
+
         filenames = []
         bootstrap_export = []
         logging.info('PARENT --- Parent process is using {} MB of memory.'.format(psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2))
+
+        freq_map = self.frequency_map(['ID_1', stratify_column])
 
         for i in range(n_bootstraps):
             start = time.time()
@@ -435,6 +466,7 @@ class FeatureSelector():
                 this_sample = self.bootstrap(n_samples = n_samples, stratify_column = stratify_column)
                 bootstrap_export.append(this_sample['ID_1'].tolist())
                 logging.info('PARENT --- Created new in {} seconds'.format(str(time.time() - start)))
+            this_sample = self.frequency_mask(this_sample, freq_threshold, freq_map)
             for j in range(len(selectors)):
                 function = selectors[j]
                 selector_folder = os.path.join(self.out_folder, out_name + '_' + selector_names[j])
@@ -449,40 +481,48 @@ class FeatureSelector():
                 filenames.append(filename)
 
         final = pd.DataFrame()
-        snps = pd.read_csv(filenames[0])['SNP']
+        snp_df_masked = self.frequency_mask(self.data.drop(columns = [stratify_column, 'ID_1']), freq_threshold, freq_map)
+        snps = snp_df_masked.columns.tolist()
         final['SNP'] = snps
+        final['frequency'] = np.zeros(len(snps))
+
+        total_format = 'total_{}_' + str(k_best) + '_best'
+        nan_format = 'nan_{}'
+        target_format = '{}_score'
+        
         for name in selector_names:
-            final['total_' + name] = np.zeros(len(snps))
-            final['nan_' + name] = np.zeros(len(snps))
+            final[total_format.format(name)] = np.zeros(len(snps))
+            final[nan_format.format(name)] = np.zeros(len(snps))
+            
         for file in filenames:
             curr_file = pd.read_csv(file)
-            if 'chi2' in file:
-                total_column = 'total_chi2'
-                nan_column = 'nan_chi2'
-                target_column = 'chi2_score'
-            elif 'infogain' in file:
-                total_column = 'total_infogain'
-                nan_column = 'nan_infogain'
-                target_column = 'infogain_score'
-            elif 'mrmr' in file:
-                total_column = 'total_mrmr'
-                nan_column = 'nan_mrmr'
-                target_column = 'mrmr_score'
-            elif 'jmi' in file:
-                total_column = 'total_jmi'
-                nan_column = 'nan_jmi'
-                target_column = 'jmi_score'
-            for snp in final['SNP']:
-                result = curr_file.loc[curr_file['SNP'] == snp, target_column]
-                if result.isna().item():
-                    final.loc[final['SNP'] == snp, nan_column] += 1
-                else:
-                    final.loc[final['SNP'] == snp, total_column] += curr_file.loc[curr_file['SNP'] == snp, target_column].item()
-        final
-        for name in selector_names:
-            final['average_' + name] = final['total_' + name] / ((final['nan_' + name] * -1) + n_bootstraps)
-        final.to_csv(os.path.join(self.out_folder, out_name + '.csv'))
+            test_and_number = os.path.basename(file).split('.')[0]
+            test_name = test_and_number.split('_')[0]
+            if curr_file['SNP'].tolist() != snps:
+                raise Exception('SNPs are not in order in {}'.format(file))
+            target_column = target_format.format(test_name)
+            final[test_and_number + '_score'] = curr_file[target_column]
 
+        column_format = '{}_{}_score'
+        for snp in final['SNP']:
+            for name in selector_names:
+                results = []
+                for j in range(n_bootstraps):
+                    this_col = column_format.format(name, j)
+                    value_cell = final.loc[final['SNP'] == snp, this_col]
+                    if value_cell.isna().item():
+                        final.loc[final['SNP'] == snp, nan_format.format(name)] += 1
+                    else:
+                        results.append(value_cell.item())
+                if name == 'mwu':
+                    results.sort()
+                else:
+                    results.sort(reverse = True)
+                final.loc[final['SNP'] == snp, total_format.format(name)] = sum(results[:k_best])
+            final.loc[final['SNP'] == snp, 'frequency'] = freq_map[snp]
+
+        final.to_csv(os.path.join(self.out_folder, out_name + '.csv'))
+            
         bootstrap_df = pd.DataFrame()
         for i in range(len(bootstrap_export)):
             name = 'bootstrap_' + str(i + 1)

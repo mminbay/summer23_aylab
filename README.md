@@ -89,13 +89,23 @@ $ wget  -nd  biobank.ndph.ox.ac.uk/ukb/util/gfetch
 Since you might want to organize your `data` folder as you wish, there is a `.env.example` provided in this repository. Set the environment variables as appropriate and rename the file to `.env` to make it usable.
 
 ## Usage
-### Unhandled Features
-
 ### `load_data.py`
-This file defines the `DataLoader` class, which is meant to help you compile a final dataset from your phenotype data and genetic data.  
-* 
+This file defines the `DataLoader` class, which is meant to help you compile a final dataset from your phenotype data and genetic data.
 
+### `feature_selector.py`
+This file defines the `FeatureSelector` class, alongside with some feature selection functions that will be used by this class. Make sure you are importing all of these functions (for now these are `chisquare`, `infogain`, `jmi`, `mrmr`, and `mann_whitney_u`). 
 
+(Hopefully) the only method you should have to interact with here is `bootstrapped_feat_select()`. Read its documentation for more details.
+
+If you are also working with a large dataset, you might have your SNP data spread across multiple files and call a separate `FeatureSelector` for all of them, meaning you will have different output files at the end of your feature selection. If you want to compile your selected SNPs into a single .csv file for further analysis (or for subset based feature selection), this file also contains a `compile_snps()` function that does exactly that. You are welcome :)
+
+### Unhandled Features
+While this package is meant to facilitate your UKB data analyses, not every part of the step is automated by the package. You will have to do some manual data crunching in between steps such as feature selection and analysis. I decided against automating the entire process because:
+1. Sanity checks are important to see if your code is doing what you want it to do.
+2. Things change. I might write some code today to filter SNPs that appear in less than 2 out of 3 runs, but maybe you'll have an entirely different criteria for filtering. It's easier to modify things when they are clearly organized.
+3. Things crash. It is sad to see that your code stopped working in an intermediary step, and now you either have to hack it to start from where it left off or run the entire thing again. So just run it part by part.
+4. It really isn't that hard to open a .csv in a python notebook and get the best performing SNPs, or to merge two tables based on a column. Do some work.
+5. I suffered, so you should as well :D
 ## Example
 
 ## additional resources in this repository  
