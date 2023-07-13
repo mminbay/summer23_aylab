@@ -7,8 +7,9 @@ import time
 import logging
 from skfeature.function.information_theoretical_based import LCSI
 from sklearn.feature_selection import chi2
-from statsmodels.stats.multitest import fdrcorrection
 from sklearn.feature_selection import mutual_info_classif
+from scipy.stats import mannwhitneyu
+from statsmodels.stats.multitest import fdrcorrection
 from sklearn.utils import resample
 import multiprocessing as mp
 from multiprocessing import Pool
@@ -74,25 +75,36 @@ def fs_wrapper(args):
     Arguments:
         args (tuple) -- a tuple that should contain five fields
             args[0] (str) -- rsid of snp
-            args[1] (function) -- feature selection function to be used
-            args[2] (shared_objects.SharedPandasDataFrame) -- reference to shared df object
-            args[3] (shared_objects.SharedNumpyArray) -- reference to shared target arr object
-            args[4] (str) -- name of feature selection function
+            args[1] (shared_objects.SharedPandasDataFrame) -- reference to shared df object
+            args[2] (shared_objects.SharedNumpyArray) -- reference to shared target arr object
+            args[3] (str) -- name of feature selection function
     Returns:
         result (any) -- whatever is returned from passed feat select function
         args[0] (str) -- rsid of snp
         frequency (int) -- how many times this snp appeared in the population
     '''
     start = time.time()
-    data = args[2].read()
-    target = args[3].read()
+    data = args[1].read()
+    target = args[2].read()
     predictor = np.reshape(data[args[0]].to_numpy(), (-1, 1))
-    frequency = len(data) - data[args[0]].value_counts()[0]
-    fs_func = args[1]
-    if args[4] == 'infogain':
-        result = fs_func(predictor, target, random_state = 0)
+    frequency = data[args[0]].sum()
+    if args[3] == 'infogain':
+        result = mutual_info_classif(predictor, target, random_state = 0)
+    elif args[3] == 'chi2':
+        result = chi2(predictor, target)
+    elif args[3] == 'mwu':
+        zero_vector = target[np.where(data[args[0]] == 0)]
+        one_vector = target[np.where(data[args[0]] == 1)]
+        if len(zero_vector) == 0 or len(one_vector) == 0:
+            u1 = np.inf
+            u2 = np.inf
+            p = np.nan
+        else:
+            u1, p = mannwhitneyu(zero_vector, one_vector)
+            u2, _ = mannwhitneyu(one_vector, zero_vector)
+        result = (u1, u2, p)
     else:
-        result = fs_func(predictor, target)
+        raise Exception('Unrecognized feature selection function name: {}'.format(args[3]))
     duration = time.time() - start
     logging.info('CHILD --- pid: {}. Completed a test for {} at {} in {} seconds. Currently using {} MB memory.'
                  .format(os.getpid(), args[0], time.ctime(), duration, psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2))
@@ -116,7 +128,7 @@ def chisquare(data, target, out_name, kwargs):
     shared_snp_data = SharedPandasDataFrame(only_snp_data)
     shared_target_arr = SharedNumpyArray(target_arr)
     
-    individual_args = [(snp, chi2, shared_snp_data, shared_target_arr, 'chi2') for snp in only_snp_data]
+    individual_args = [(snp, shared_snp_data, shared_target_arr, 'chi2') for snp in only_snp_data]
 
     parallel_time = time.time()
     logging.info('PARENT --- Started parallelization of feature selection at: ' + time.ctime())
@@ -157,7 +169,7 @@ def infogain(data, target, out_name, kwargs):
     shared_snp_data = SharedPandasDataFrame(only_snp_data)
     shared_target_arr = SharedNumpyArray(target_arr)
     
-    individual_args = [(snp, mutual_info_classif, shared_snp_data, shared_target_arr, 'infogain') for snp in only_snp_data]
+    individual_args = [(snp, shared_snp_data, shared_target_arr, 'infogain') for snp in only_snp_data]
 
     parallel_time = time.time()
     logging.info('PARENT --- Started parallelization of feature selection at: ' + time.ctime())
@@ -176,6 +188,49 @@ def infogain(data, target, out_name, kwargs):
     df["infogain_score"] = [result[0][0] for result in results]
     df['frequency'] = [result[2] for result in results]
     df.sort_values(by="infogain_score", inplace=True, ascending = False)
+    
+    df.to_csv(out_name)
+
+def mann_whitney_u(data, target, out_name, kwargs):
+    '''
+    Runs infogain feature selection on the data and the target values. Outputs
+    results to a .csv at given path
+
+    Arguments:
+        data (DataFrame) -- dataset
+        target (str) -- target column label in dataset
+        outname (str) -- path where the results will be outputted
+    '''
+    start_time = time.time()
+    logging.info('PARENT --- Started rounds of feature selection at: ' + time.ctime())
+    target_arr = data[target].to_numpy().astype('int')
+    only_snp_data = data.drop(columns = [target, 'ID_1'])
+
+    shared_snp_data = SharedPandasDataFrame(only_snp_data)
+    shared_target_arr = SharedNumpyArray(target_arr)
+    
+    individual_args = [(snp, shared_snp_data, shared_target_arr, 'mwu') for snp in only_snp_data]
+
+    parallel_time = time.time()
+    logging.info('PARENT --- Started parallelization of feature selection at: ' + time.ctime())
+    logging.info('PARENT --- Overhead to start parallelizing: ' + (str(parallel_time - start_time)))
+    with Pool() as pool:
+        results = pool.map(fs_wrapper, individual_args)
+    shared_snp_data.unlink()
+    shared_target_arr.unlink()
+
+    end_time = time.time()
+    logging.info('PARENT --- Stopped parallelization of feature selection at: ' + time.ctime())
+    logging.info('PARENT --- Parallelized step took: ' + (str(end_time - parallel_time)))
+    
+    df = pd.DataFrame()
+    df["SNP"] = [result[1] for result in results]
+    df["mwu_1"] = [result[0][0] for result in results]
+    df["mwu_2"] = [result[0][1] for result in results]
+    df["u_min"] = [min(result[0][0], result[0][1]) for result in results]
+    df["p_val"] = [result[0][2] for result in results]
+    df['frequency'] = [result[2] for result in results]
+    df.sort_values(by="u_min", inplace=True)
     
     df.to_csv(out_name)
 
