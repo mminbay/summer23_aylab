@@ -7,7 +7,7 @@ library("dplyr")
 
 
 ###########################################
-# pre processing
+#1 pre processing
 #########
 
 # reading the data file with all the important SNPs, as well as the covariating clinical factors of importance # nolint
@@ -36,11 +36,12 @@ print(column_range)
 
 
 #######################
-# Using binarized PHQ9
+#2 Using binarized PHQ9
 ###############
 
-# change clinical factors and target as you want
+# change clinical factors and target as you want. these are the columnn names
 clinical <- c("Sex", "Age", "Chronotype", "Sleeplessness_Insomnia", "TSDI")
+# change target to just "PHQ9" for continuous, or whatever your target column name is
 target <- "PHQ9_binary"
 
 snpcols <- colnames(snpdata)[min(snp_column_numbers):max(snp_column_numbers)]
@@ -61,11 +62,14 @@ data.snp <- setupSNP(data = snpdata %>%
                        select(all_of(c(snp_column_names, clinical, target))),
                      colSNPs = 1:length(snp_column_names), sep = "")
 
-# the interactionPval function
+# the interactionPval function, also change the target here if not PHQ9_binary
 result.snp = interactionPval(as.formula(paste("PHQ9_binary~",
                                           paste(clinical, collapse="+"))), 
                          data.snp, model = "do")
 
+#################################
+#3 outputting the results to a csv
+#################
 # change the file path to save the result files there
 write.csv(result.snp, file = "data/snp-snp_interaction.csv", row.names = TRUE) # nolint
 png("data/snp-snp_interaction.png", width = 8, height = 6, units = "in", res = 300)  # Adjust the resolution as needed # nolint
