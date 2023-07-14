@@ -330,11 +330,11 @@ def lasso(data, target, out_name, kwargs):
 
     alpha_descent = 0.005
     if 'alpha_descent' in kwargs.keys():
-        alpha = kwargs['alpha_descent']
+        alpha_descent = kwargs['alpha_descent']
 
     n_selected_features = 50
     if 'n_selected_features' in kwargs.keys():
-        alpha = kwargs['n_selected_features']
+        n_selected_features = kwargs['n_selected_features']
 
     selected_len = -1
 
