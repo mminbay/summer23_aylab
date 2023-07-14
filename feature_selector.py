@@ -8,6 +8,7 @@ import logging
 from skfeature.function.information_theoretical_based import LCSI
 from sklearn.feature_selection import chi2
 from sklearn.feature_selection import mutual_info_classif
+from sklearn.linear_model import Lasso
 from scipy.stats import mannwhitneyu
 from statsmodels.stats.multitest import fdrcorrection
 from sklearn.utils import resample
@@ -307,6 +308,54 @@ def jmi(data, target, out_name, kwargs):
     df.reset_index(drop = True, inplace = True)
     df.loc[F, 'jmi_score'] = 1
     df.to_csv(out_name)
+
+def lasso(data, target, out_name, kwargs):
+    '''
+    DO NOT CALL DIRECTLY
+    Applies LASSO feature selection on the data and target values. Outputs
+    results to a .csv at given path
+
+    Arguments:
+        data (DataFrame) -- dataset
+        target (str) -- target column label in dataset
+        outname (str) -- path where the results will be outputted
+    '''
+    target_arr = data[target].to_numpy().astype('int')
+    only_snp_data = data.drop(columns = [target, 'ID_1'])
+    data_arr = only_snp_data.to_numpy()
+
+    alpha = 0.01
+    if 'alpha' in kwargs.keys():
+        alpha = kwargs['alpha']
+
+    alpha_descent = 0.005
+    if 'alpha_descent' in kwargs.keys():
+        alpha = kwargs['alpha_descent']
+
+    n_selected_features = 50
+    if 'n_selected_features' in kwargs.keys():
+        alpha = kwargs['n_selected_features']
+
+    selected_len = -1
+
+    while selected_len < n_selected_features:
+        logging.info('Running LASSO with alpha value: {}'.format(str(alpha)))
+        lasso = Lasso(alpha = alpha)  
+        lasso.fit(data_arr, target_arr)
+
+        important_features = only_snp_data.columns[abs(lasso.coef_) > 0]
+        selected_len = len(important_features)
+        logging.info('Selected {} features.'.format(str(selected_len)))
+        alpha -= alpha_descent
+
+    df = pd.DataFrame()
+    df['SNP'] = only_snp_data.columns.tolist()
+    df['lasso_coeff'] = lasso.coef_
+    df['lasso_score'] = abs(lasso.coef_)
+    df.reset_index(drop = True, inplace = True)
+    df.to_csv(out_name)
+    
+    
 
 class FeatureSelector():
     # TODO: implement init
