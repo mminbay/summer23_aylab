@@ -348,13 +348,13 @@ class FeatureSelector():
         Hide SNPs from dataframe that have less than the desired frequency.
 
         Arguments:
-            threshold (int) -- SNPs with frequency less than or equal to this will not be included in the returned dataset
+            threshold (int) -- SNPs with frequency less than this will not be included in the returned dataset
             ignore (list(str)) -- column labels to ignore while counting frequencies. usually this should be ['ID_1', 'PHQ9_binary'] ('PHQ9' for cont. outcome)
 
         Returns:
             data (DataFrame) -- a view of self.data with infrequent SNPs removed
         '''
-        cols_to_drop = [snp for snp in freq_map if freq_map[snp] <= threshold]
+        cols_to_drop = [snp for snp in freq_map if freq_map[snp] < threshold]
         return data.drop(columns = cols_to_drop)
         
     def bootstrap(self, n_samples = None, stratify_column = None):
@@ -424,8 +424,8 @@ class FeatureSelector():
         Compiles results across all and outputs them as a .csv file.
 
         Arguments:
-            n_bootstraps (int) -- number of bootstraps. ignored if bootstraps is not None.
             freq_threshold (int) -- SNPs that appear less than this number in self.data will not be included in feature selection
+            n_bootstraps (int) -- number of bootstraps. ignored if bootstraps is not None. pass None for same size as original sample size
             n_samples (int) -- number of samples in each bootstrap. ignored if bootstraps is not None.
             stratify_column (str) -- column label to use for feature selection and stratifying the bootstrap.
             selectors (list(function)) -- list of functions to use for feature selection. 
