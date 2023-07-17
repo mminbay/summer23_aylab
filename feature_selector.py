@@ -324,11 +324,11 @@ def lasso(data, target, out_name, kwargs):
     only_snp_data = data.drop(columns = [target, 'ID_1'])
     data_arr = only_snp_data.to_numpy()
 
-    alpha = 0.01
+    alpha = 0.005
     if 'alpha' in kwargs.keys():
         alpha = kwargs['alpha']
 
-    alpha_descent = 0.005
+    alpha_descent = 0.00005
     if 'alpha_descent' in kwargs.keys():
         alpha_descent = kwargs['alpha_descent']
 
