@@ -716,12 +716,13 @@ class Stat_Analyzer():
         Runs multivariate regression on binarized, OHC data for given target variable.
         Saves results as a .csv file with given name
         '''
-        y_train = self.binOHCdata[target]
-        x_train_sm = sm.add_constant(self.binOHCdata.drop(columns = [target, 'ID_1']))
+        y = self.binOHCdata[target]
+        X = self.binOHCdata.drop(columns = ['ID_1'])
 
-        logm2 = sm.GLM(y_train, x_train_sm, family=sm.families.Binomial())
-        res = logm2.fit()
-        self.display_regression_results(x_train_sm.columns, res, out_file)
+        res=sm.GLM(y, X.loc[:, X.columns != 'PHQ9_binary'], family = sm.families.Binomial(link = sm.families.links.logit())).fit()
+
+        # res = sm.GLM(y, X, family = sm.families.Binomial(link = sm.families.links.logit())).fit()
+        self.display_regression_results(X.columns, res, out_file)
 
     def display_regression_results(self, variable, res, out_file):
         '''
