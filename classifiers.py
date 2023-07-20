@@ -170,7 +170,7 @@ class ClassifierHelper():
             iter (int) -- number of iterations for provided classifier.
         '''
         if classifier =='rdforest':
-            return {'n_estimators': Integer(200,2000), 'max_depth': Integer(5,100),
+            return {'n_estimators': Integer(50,2000), 'max_depth': Integer(5,100),
             'min_samples_split':Integer(2,10), 'min_samples_leaf':Integer(1,5),
             'class_weight': Real(0.01, 0.99, prior = 'log-uniform')}, 60
         elif classifier == 'logreg':
@@ -190,10 +190,10 @@ class ClassifierHelper():
             'C': Real(1e-3, 1e3, prior = 'log-uniform'), 'kernel': ['linear', 'rbf', 'poly'],
             'class_weight': Real(0.01, 0.99, prior = 'log-uniform')}, 60
         elif classifier == 'xgboost':
-            return {'eta':Real(0.005, 0.5, prior = 'log-uniform'), 'max_depth': Integer(3,15),
+            return {'eta':Real(0.005, 1, prior = 'log-uniform'), 'max_depth': Integer(3,15),
             'subsample' : Real(0.01, 0.99, prior = 'log-uniform'), 'scale_pos_weight' : Integer(1,100),
             'colsample_bytree' : Real(0.01, 0.99, prior = 'log-uniform'), 
-            'n_estimators':Integer(50, 500),  'min_child_weight' : Integer(5,10)}, 80
+            'n_estimators':Integer(50, 500),  'min_child_weight' : Integer(1,100)}, 80
         raise Exception('Unknown classifier: {}'.format(classifier))
 	
     def resample(self, target_column):
@@ -221,7 +221,7 @@ class ClassifierHelper():
             target_column (str) -- outcome column in self.data. predictions will be made for this column.
             n_runs (int) -- number of times to run k-fold cross validation.
             n_folds (int) -- number of cross validations in each run (k in k-fold cross validation).
-            classifier (int) -- string identifier of the classifier to be used.
+            classifier (str) -- string identifier of the classifier to be used.
             method (str) -- i don't know what this is, but the code might break without it.
             balance_data (bool) -- if True, will balance dataset during k-fold cross validation using SMOTE
         '''
