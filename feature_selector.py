@@ -660,21 +660,30 @@ class FeatureSelector():
 Below is an example usage
 '''
 
-'''
-def main():
-    data = pd.read_csv('/home/mminbay/summer_research/summer23_aylab/data/imputed_data/final_data/final_depression_allsnps_6000extra_c1.csv', index_col = 0)
 
-    data.drop(columns = ['Sex'], inplace = True)
+# def main():
+#     data = pd.read_csv('/home/mminbay/summer_research/summer23_aylab/data/imputed_data/final_data/final_depression_allsnps_6000extra_c1.csv', index_col = 0)
+
+#     data.drop(columns = ['Sex'], inplace = True)
     
-    fselect = FeatureSelector(
-        data, 
-        '/home/mminbay/summer_research/summer23_aylab/data/feat_select/'
-    )
-    fselect.bootstrapped_feat_select(10, 1000, 'PHQ9_binary', 1, [fselect.chisquare, fselect.infogain], ['chi2', 'infogain'], 'test')
+#     fselect = FeatureSelector(
+#         data, 
+#         '/home/mminbay/summer_research/summer23_aylab/data/feat_select/'
+#     )
+#     fselect.bootstrapped_feat_select(
+#         5,
+#         3,
+#         None,
+#         'PHQ9_binary',
+#         ['jmi']
+#         [{'n_selected_features': 50}],
+#         'jmi_test',
+#         k_best = 2,
+#         bootstraps = fselect.load_bootstraps('/home/mminbay/summer_research/summer23_aylab/example_bootstraps.csv')
     
-if __name__ == '__main__':
-    main()
-'''
+# if __name__ == '__main__':
+#     main()
+
             
         
         

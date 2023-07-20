@@ -366,11 +366,11 @@ class DataLoader():
         One-hot encode the given columns on the given dataframe. Returns OHC encoded dataframe
 
         Arguments:
-        data -- dataframe to be modified
-        columns -- features to be one-hot encoded
+            data -- dataframe to be modified
+            columns -- features to be one-hot encoded
 
         Returns:
-        result -- OHC encoded dataframe
+            result -- OHC encoded dataframe
         '''
         return pd.get_dummies(data, columns = columns, drop_first = True)
         
@@ -557,6 +557,26 @@ Below is an example usage
 
 #     print('created dataloader')
     
+#     clinical_factors = [
+#         ("Sex", 31, "binary"),
+#         ("Age", 21022, "continuous"),
+#         ("Chronotype", 1180, "continuous"),
+#         ("Sleeplessness/Insomnia", 1200, "continuous"),
+#     ] # an example phenotype dataset
+
+#     dl.create_table('clinical_factors', clinical_factors) # make dataset
+
+#     dl.calcPHQ9('PHQ9_scores', binary_cutoff = 10) # make PHQ9 dataset
+
+#     cf_table = dl.get_table('clinical_factors')
+#     phq_table = df.get_table('PHQ9_scores')
+#     cf_table = cf_table.dropna()
+#     phq_table = phq_table.dropna()
+
+#     final = cf_table.merge(phq_table, on = 'ID_1')
+
+#     final.to_csv('/home/mminbay/summer_research/summer23_aylab/data/depression_data.csv')
+
 #     dl.load_chroms_and_intervals('/home/mminbay/summer_research/summer23_aylab/data/snps/gene_by_gene/c15_i1.txt')
 
 #     dl.get_imputed_from_intervals_for_ids(
@@ -569,23 +589,6 @@ Below is an example usage
 #         use_list = False,
 #         get_alleles = True
 #     )
-    
-        
-    
-#     clinical_factors = [
-#         ("Sex", 31, "binary"),
-#         ("Age", 21022, "continuous"),
-#         ("Chronotype", 1180, "continuous"),
-#         ("Sleeplessness/Insomnia", 1200, "continuous"),
-#     ] # an example phenotype dataset
-
-#     dl.create_table('clinical factors', clinical_factors) # make dataset
-
-#     dl.calcPHQ9('PHQ9 scores', binary_cutoff = 10) # make PHQ9 dataset
-
-
-
-#     dl.export_all(['Sex', 'Age', 'Chronotype', 'Sleeplessness/Insomnia'], filename = 'depression23') # export all informartion as a single table
 
 # if __name__ == "__main__":
 #     main()
