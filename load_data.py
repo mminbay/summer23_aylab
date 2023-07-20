@@ -289,6 +289,7 @@ class DataLoader():
 
             df = pd.DataFrame(rows, index = indices, columns = ordered_kept_ids)
             df = df.transpose()
+            df['ID_1'] = df.index.astype(int)
             formatted_name = table_name.format(chroms[i])
             if export:
                 out_file = os.path.join(self.out_folder, formatted_name + '.csv')

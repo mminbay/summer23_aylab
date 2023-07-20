@@ -9,7 +9,7 @@ from skfeature.function.information_theoretical_based import LCSI
 from sklearn.feature_selection import chi2
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.linear_model import Lasso
-from scipy.stats import mannwhitneyu
+from scipy.stats import mannwhitneyu, ttest_ind
 from statsmodels.stats.multitest import fdrcorrection
 from sklearn.utils import resample
 import multiprocessing as mp
@@ -82,7 +82,7 @@ def fs_wrapper(args):
             args[2] (shared_objects.SharedNumpyArray) -- reference to shared target arr object
             args[3] (str) -- name of feature selection function
     Returns:
-        result (any) -- whatever is returned from passed feat select function
+        result (dict(str: any)) -- whatever is returned from passed feat select function
         args[0] (str) -- rsid of snp
         frequency (int) -- how many times this snp appeared in the population
     '''
@@ -91,21 +91,37 @@ def fs_wrapper(args):
     target = args[2].read()
     predictor = np.reshape(data[args[0]].to_numpy(), (-1, 1))
     frequency = data[args[0]].sum()
+    result = {}
     if args[3] == 'infogain':
-        result = mutual_info_classif(predictor, target, random_state = 0)
+        result['score'] = mutual_info_classif(predictor, target, random_state = 0)[0]
     elif args[3] == 'chi2':
-        result = chi2(predictor, target)
+        score, p_val = chi2(predictor, target)
+        result['score'] = score[0]
+        result['p_val'] = p_val[0]
     elif args[3] == 'mwu':
         zero_vector = target[np.where(data[args[0]] == 0)]
         one_vector = target[np.where(data[args[0]] == 1)]
         if len(zero_vector) == 0 or len(one_vector) == 0:
             u1 = np.nan
             u2 = np.nan
-            p = np.nan
+            p_val = np.nan
         else:
-            u1, p = mannwhitneyu(zero_vector, one_vector)
+            u1, p_val = mannwhitneyu(zero_vector, one_vector)
             u2, _ = mannwhitneyu(one_vector, zero_vector)
-        result = (u1, u2, p)
+        result['score_1'] = u1
+        result['score_2'] = u2
+        result['p_val'] = p_val
+    elif args[3] == 'ttest':
+        print('yee')
+        zero_vector = target[np.where(data[args[0]] == 0)]
+        one_vector = target[np.where(data[args[0]] == 1)]
+        if len(zero_vector) == 0 or len(one_vector) == 0:
+            t_stat = np.nan
+            p_val = np.nan
+        else:
+            t_stat, p_val = ttest_ind(zero_vector, one_vector)
+        result['score'] = t_stat
+        result['p_val'] = p_val
     else:
         raise Exception('Unrecognized feature selection function name: {}'.format(args[3]))
     duration = time.time() - start
@@ -148,8 +164,8 @@ def chisquare(data, target, out_name, kwargs):
 
     df = pd.DataFrame()
     df["SNP"] = [result[1] for result in results]
-    df["chi2_score"] = [result[0][0][0] for result in results]
-    df["p_val"] = [result[0][1][0] for result in results]
+    df["chi2_score"] = [result[0]['score'] for result in results]
+    df["p_val"] = [result[0]['p_val'] for result in results]
     df['frequency'] = [result[2] for result in results]
     # df.sort_values(by="chi2_score", inplace=True, ascending = False)
 
@@ -190,8 +206,9 @@ def infogain(data, target, out_name, kwargs):
     
     df = pd.DataFrame()
     df["SNP"] = [result[1] for result in results]
-    df["infogain_score"] = [result[0][0] for result in results]
+    df["infogain_score"] = [result[0]['score'] for result in results]
     df['frequency'] = [result[2] for result in results]
+    df['p_val'] = 0
     # df.sort_values(by="infogain_score", inplace=True, ascending = False)
     
     df.to_csv(out_name)
@@ -199,7 +216,7 @@ def infogain(data, target, out_name, kwargs):
 def mann_whitney_u(data, target, out_name, kwargs):
     '''
     DO NOT CALL DIRECTLY
-    Runs infogain feature selection on the data and the target values. Outputs
+    Runs mann-whitney-u feature selection on the data and the target values. Outputs
     results to a .csv at given path
 
     Arguments:
@@ -231,10 +248,53 @@ def mann_whitney_u(data, target, out_name, kwargs):
     
     df = pd.DataFrame()
     df["SNP"] = [result[1] for result in results]
-    df["mwu_1"] = [result[0][0] for result in results]
-    df["mwu_2"] = [result[0][1] for result in results]
-    df["mwu_score"] = [min(result[0][0], result[0][1]) for result in results]
-    df["p_val"] = [result[0][2] for result in results]
+    df["mwu_1"] = [result[0]['score_1'] for result in results]
+    df["mwu_2"] = [result[0]['score_2'] for result in results]
+    df["mwu_score"] = [min(result[0]['score_1'], result[0]['score_2']) for result in results]
+    df["p_val"] = [result[0]['p_val'] for result in results]
+    df['frequency'] = [result[2] for result in results]
+    # df.sort_values(by="u_min", inplace=True)
+    
+    df.to_csv(out_name)
+
+def ttest(data, target, out_name, kwargs):
+    '''
+    DO NOT CALL DIRECTLY
+    Runs t_test feature selection on the data and the target values. Outputs
+    results to a .csv at given path
+
+    Arguments:
+        data (DataFrame) -- dataset
+        target (str) -- target column label in dataset
+        outname (str) -- path where the results will be outputted
+    '''
+    start_time = time.time()
+    logging.info('PARENT --- Started rounds of feature selection at: ' + time.ctime())
+    target_arr = data[target].to_numpy().astype('int')
+    only_snp_data = data.drop(columns = [target, 'ID_1'])
+
+    shared_snp_data = SharedPandasDataFrame(only_snp_data)
+    shared_target_arr = SharedNumpyArray(target_arr)
+    
+    individual_args = [(snp, shared_snp_data, shared_target_arr, 'ttest') for snp in only_snp_data]
+
+    parallel_time = time.time()
+    logging.info('PARENT --- Started parallelization of feature selection at: ' + time.ctime())
+    logging.info('PARENT --- Overhead to start parallelizing: ' + (str(parallel_time - start_time)))
+    with Pool() as pool:
+        results = pool.map(fs_wrapper, individual_args)
+    shared_snp_data.unlink()
+    shared_target_arr.unlink()
+
+    end_time = time.time()
+    logging.info('PARENT --- Stopped parallelization of feature selection at: ' + time.ctime())
+    logging.info('PARENT --- Parallelized step took: ' + (str(end_time - parallel_time)))
+    
+    df = pd.DataFrame()
+    df["SNP"] = [result[1] for result in results]
+    df['t_statistic'] = [result[0]['score'] for result in results]
+    df['ttest_score'] = [abs(result[0]['score']) for result in results]
+    df["p_val"] = [result[0]['p_val'] for result in results]
     df['frequency'] = [result[2] for result in results]
     # df.sort_values(by="u_min", inplace=True)
     
@@ -270,6 +330,7 @@ def mrmr(data, target, out_name, kwargs):
     df = pd.DataFrame()
     df['SNP'] = only_snp_data.columns.tolist()
     df['mrmr_score'] = 0
+    df['p_val'] = 0
     df.reset_index(drop = True, inplace = True)
     df.loc[F, 'mrmr_score'] = 1
     df.to_csv(out_name)
@@ -305,6 +366,7 @@ def jmi(data, target, out_name, kwargs):
     df = pd.DataFrame()
     df['SNP'] = only_snp_data.columns.tolist()
     df['jmi_score'] = 0
+    df['p_val'] = 0
     df.reset_index(drop = True, inplace = True)
     df.loc[F, 'jmi_score'] = 1
     df.to_csv(out_name)
@@ -352,11 +414,10 @@ def lasso(data, target, out_name, kwargs):
     df['SNP'] = only_snp_data.columns.tolist()
     df['lasso_coeff'] = lasso.coef_
     df['lasso_score'] = abs(lasso.coef_)
+    df['p_val'] = 0
     df.reset_index(drop = True, inplace = True)
     df.to_csv(out_name)
     
-    
-
 class FeatureSelector():
     # TODO: implement init
     def __init__(
@@ -397,13 +458,14 @@ class FeatureSelector():
         Hide SNPs from dataframe that have less than the desired frequency.
 
         Arguments:
-            threshold (int) -- SNPs with frequency less than this will not be included in the returned dataset
+            threshold (int) -- if either the group with the snp or without the snp is smaller than this number, the snp will be ignored
             ignore (list(str)) -- column labels to ignore while counting frequencies. usually this should be ['ID_1', 'PHQ9_binary'] ('PHQ9' for cont. outcome)
 
         Returns:
             data (DataFrame) -- a view of self.data with infrequent SNPs removed
         '''
-        cols_to_drop = [snp for snp in freq_map if freq_map[snp] < threshold]
+        total = len(data)
+        cols_to_drop = [snp for snp in freq_map if freq_map[snp] < threshold or (total - freq_map[snp] < threshold)]
         return data.drop(columns = cols_to_drop)
         
     def bootstrap(self, n_samples = None, stratify_column = None):
@@ -460,8 +522,7 @@ class FeatureSelector():
         freq_threshold,
         n_bootstraps,
         n_samples,
-        stratify_column, 
-        selectors, 
+        stratify_column,
         selector_names,
         selector_kwargs,
         out_name,
@@ -473,20 +534,17 @@ class FeatureSelector():
         Compiles results across all and outputs them as a .csv file.
 
         Arguments:
-            freq_threshold (int) -- SNPs that appear less than this number in self.data will not be included in feature selection
+            freq_threshold (int) -- if either the group with the snp or without the snp is smaller than this number, the snp will be ignored
             n_bootstraps (int) -- number of bootstraps. ignored if bootstraps is not None. pass None for same size as original sample size
             n_samples (int) -- number of samples in each bootstrap. ignored if bootstraps is not None.
             stratify_column (str) -- column label to use for feature selection and stratifying the bootstrap.
-            selectors (list(function)) -- list of functions to use for feature selection. 
             selector_names (list(str)) -- list of function names that will be used to name subdirectories.
             selector_kwargs (list(dict(str: any))) -- list of dictionaries for kwargs to pass into selector functions
             out_name (str) -- name of subdirectories and compiled results file that will be created
+            k_best (int) -- the final score of a snp will be the sum of this many best scores across all tests
             bootstraps (list(list(int))) -- if not None, use this to create samples instead of creating new random samples
         ''' 
-        if len(selectors) != len(selector_names):
-            raise Exception('Selector list must be as long as selector name list')
-
-        if len(selectors) != len(selector_kwargs):
+        if len(selector_names) != len(selector_kwargs):
             raise Exception('Selector list must be as long as selector kwargs list')
 
         if bootstraps is not None:
@@ -516,17 +574,34 @@ class FeatureSelector():
                 bootstrap_export.append(this_sample['ID_1'].tolist())
                 logging.info('PARENT --- Created new in {} seconds'.format(str(time.time() - start)))
             this_sample = self.frequency_mask(this_sample, freq_threshold, freq_map)
-            for j in range(len(selectors)):
-                function = selectors[j]
-                selector_folder = os.path.join(self.out_folder, out_name + '_' + selector_names[j])
+            for j in range(len(selector_names)):
+                selector_name = selector_names[j]
+                selector_folder = os.path.join(self.out_folder, out_name + '_' + selector_name)
                 if not os.path.exists(selector_folder):
                     os.makedirs(selector_folder)
                     logging.info('made a folder ' + selector_folder)
                 filename = os.path.join(selector_folder, selector_names[j] + '_' + str(i) + '.csv')
-                logging.info('PARENT --- Started {} at {}'.format(selector_names[j], time.ctime()))
+                logging.info('PARENT --- Started {} at {}'.format(selector_name, time.ctime()))
                 start = time.time()
-                function(this_sample, stratify_column, filename, selector_kwargs[j])
-                logging.info('PARENT --- Finished {} at {}. That took {}'.format(selector_names[j], time.ctime(), str(time.time() - start)))
+                
+                if selector_name == 'chi2':
+                    chisquare(this_sample, stratify_column, filename, selector_kwargs[j])
+                elif selector_name == 'infogain':
+                    infogain(this_sample, stratify_column, filename, selector_kwargs[j])
+                elif selector_name == 'mwu':
+                    mann_whitney_u(this_sample, stratify_column, filename, selector_kwargs[j])
+                elif selector_name == 'ttest':
+                    ttest(this_sample, stratify_column, filename, selector_kwargs[j])
+                elif selector_name == 'mrmr':
+                    mrmr(this_sample, stratify_column, filename, selector_kwargs[j])
+                elif selector_name == 'jmi':
+                    jmi(this_sample, stratify_column, filename, selector_kwargs[j])
+                elif selector_name == 'lasso':
+                    lasso(this_sample, stratify_column, filename, selector_kwargs[j])
+                else:
+                    raise Exception('Unrecognized classifier name: {}'.format(selector_name))
+                    
+                logging.info('PARENT --- Finished {} at {}. That took {}'.format(selector_name, time.ctime(), str(time.time() - start)))
                 filenames.append(filename)
 
         final = pd.DataFrame()
@@ -551,6 +626,7 @@ class FeatureSelector():
                 raise Exception('SNPs are not in order in {}'.format(file))
             target_column = target_format.format(test_name)
             final[test_and_number + '_score'] = curr_file[target_column]
+            final[test_and_number + '_p_val'] = curr_file['p_val']
 
         column_format = '{}_{}_score'
         for snp in final['SNP']:
