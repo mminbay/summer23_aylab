@@ -27,6 +27,10 @@ snp_column_numbers <- which(names(snpdata) %in% snp_column_names)
 
 start <- min(snp_column_numbers)
 end <- max(snp_column_numbers)
+# manual override for SNP column numbers if not all of them start with rs!:
+# snpcol_start <- 
+# snpcol_end <- 
+
 # Create a range of column numbers in the form [1:10]. make sure they are consecutive # nolint
 column_range <- paste0("[", start, ":", end, "]") # nolint
 
@@ -40,7 +44,8 @@ print(column_range)
 ###############
 
 # change clinical factors and target as you want. these are the columnn names
-clinical <- c("Sex", "Age", "Chronotype", "Sleeplessness_Insomnia", "TSDI")
+clinical <- c("Chronotype_2.0", "Chronotype_3.0", "Chronotype_4.0", "Sleeplessness.Insomnia_2.0", "Sleeplessness.Insomnia_3.0", "Overall_Health_Score_2.0", "Overall_Health_Score_3.0", "Overall_Health_Score_4.0", "TSDI_n")
+
 # change target to just "PHQ9" for continuous, or whatever your target column name is
 target <- "PHQ9_binary"
 
@@ -51,6 +56,7 @@ snpcols <- colnames(snpdata)[min(snp_column_numbers):max(snp_column_numbers)]
 # this part is used to make our data suit the input data requirements
 # since dominant model compares AA vs (AB and BB) we can choose to represent
 # 1 as either AB or BB as both of them are converted to 1 in dominant model
+# make it so that it is 0 to AA and 1 to BB for recessive model
 snpdata <- snpdata %>%
   mutate_at(vars(start:end),
             list(~ ifelse(. == 0, "AA", ifelse(. == 1, "AB", .))))
@@ -62,10 +68,11 @@ data.snp <- setupSNP(data = snpdata %>%
                        select(all_of(c(snp_column_names, clinical, target))),
                      colSNPs = 1:length(snp_column_names), sep = "")
 
-# the interactionPval function, also change the target here if not PHQ9_binary
-result.snp = interactionPval(as.formula(paste("PHQ9_binary~",
-                                          paste(clinical, collapse="+"))), 
-                         data.snp, model = "do")
+# the interactionPval function. Change the target here too (PHQ9 OR PHQ9_binary, or whatever you have)
+# if you want to add clinical factors, change the line as: result.snp <- interactionPval(as.formula(paste("PHQ9_binary~", paste(clinical, collapse="+"))), # nolint
+# if you want to remove clinical factors, the same line becomes: result.snp <- interactionPval(as.formula(paste("PHQ9_binary~1")), # nolint
+result.snp <- interactionPval(as.formula(paste("PHQ9~1")), # nolint
+                             data.snp, model = "do")
 
 #################################
 #3 outputting the results to a csv
