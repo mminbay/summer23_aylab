@@ -8,7 +8,7 @@ import logging
 from skfeature.function.information_theoretical_based import LCSI
 from sklearn.feature_selection import chi2
 from sklearn.feature_selection import mutual_info_classif
-from sklearn.linear_model import Lasso
+from sklearn.linear_model import Lasso, LogisticRegression
 from scipy.stats import mannwhitneyu, ttest_ind
 from statsmodels.stats.multitest import fdrcorrection
 from sklearn.utils import resample
@@ -345,6 +345,7 @@ def jmi(data, target, out_name, kwargs):
         data (DataFrame) -- dataset
         target (str) -- target column label in dataset
         outname (str) -- path where the results will be outputted
+        kwargs (
     ---------
     Brown, Gavin et al. "Conditional Likelihood Maximisation: A Unifying Framework for Information Theoretic Feature Selection." JMLR 2012.
     '''
@@ -381,42 +382,103 @@ def lasso(data, target, out_name, kwargs):
         data (DataFrame) -- dataset
         target (str) -- target column label in dataset
         outname (str) -- path where the results will be outputted
+
+        don't change alpha unless you really know what you are doing
     '''
     target_arr = data[target].to_numpy().astype('int')
     only_snp_data = data.drop(columns = [target, 'ID_1'])
     data_arr = only_snp_data.to_numpy()
 
-    alpha = 0.005
-    if 'alpha' in kwargs.keys():
-        alpha = kwargs['alpha']
+    if 'outcome' not in kwargs.keys():
+        raise Exception('Keyword argument \'outcome\' must be specified for Lasso feature selection')
 
-    alpha_descent = 0.00005
-    if 'alpha_descent' in kwargs.keys():
-        alpha_descent = kwargs['alpha_descent']
+    if kwargs['outcome'] not in ['continuous', 'discrete']:
+        raise Exception('Keyword argument \'outcome\' must be \'continuous\' or \'discrete\'')
 
     n_selected_features = 50
     if 'n_selected_features' in kwargs.keys():
         n_selected_features = kwargs['n_selected_features']
+        
+    n_upper = n_selected_features + n_selected_features / 10
+    n_lower = n_selected_features - n_selected_features / 10
 
-    selected_len = -1
+    if kwargs['outcome'] == 'discrete':
+        '''
+        Alpha optimization for discrete lasso assumes that the final alpha value will end up between 1 and positive infinity.
+        Check feature_selector.log to see the progress. If the selector is picking too few with alpha <= 1, this will go in an 
+        infinite loop.
+        '''
+        alpha = 1
+        alpha_change = 0.5
+        
+        first_ascent = True
+    
+        selected_len = -1
+    
+        while selected_len < n_lower or selected_len > n_upper:
+            logging.info('Running LASSO with alpha value: {}'.format(str(alpha)))
+           
+            lasso = LogisticRegression(penalty = 'l1', C = 1 / alpha, solver = 'liblinear', random_state = 42)
+            lasso.fit(data_arr, target_arr)
+                
+            important_features = only_snp_data.columns[np.absolute(lasso.coef_[0]) > 0]
+            selected_len = len(important_features)
+            logging.info('Selected {} features.'.format(str(selected_len)))
+    
+            if selected_len > n_upper:
+                if first_ascent:
+                    alpha_change = alpha_change * 2
+                    alpha += alpha_change
+                else:
+                    alpha_change = alpha_change / 2
+                    alpha += alpha_change
+            elif selected_len < n_lower:
+                first_ascent = False
+                alpha_change = alpha_change / 2
+                alpha -= alpha_change
 
-    while selected_len < n_selected_features:
-        logging.info('Running LASSO with alpha value: {}'.format(str(alpha)))
-        lasso = Lasso(alpha = alpha)  
-        lasso.fit(data_arr, target_arr)
+        df = pd.DataFrame()
+        df['SNP'] = only_snp_data.columns.tolist()
+        df['lasso_coeff'] = lasso.coef_[0]
+        df['lasso_score'] = np.absolute(lasso.coef_[0])
+        df['p_val'] = 0
+        df.reset_index(drop = True, inplace = True)
+        df.to_csv(out_name)
 
-        important_features = only_snp_data.columns[abs(lasso.coef_) > 0]
-        selected_len = len(important_features)
-        logging.info('Selected {} features.'.format(str(selected_len)))
-        alpha -= alpha_descent
+    elif kwargs['outcome'] == 'continuous':
+        alpha = 1
+        alpha_change = 0.5
 
-    df = pd.DataFrame()
-    df['SNP'] = only_snp_data.columns.tolist()
-    df['lasso_coeff'] = lasso.coef_
-    df['lasso_score'] = abs(lasso.coef_)
-    df['p_val'] = 0
-    df.reset_index(drop = True, inplace = True)
-    df.to_csv(out_name)
+        selected_len = -1
+
+        while selected_len < n_lower or selected_len > n_upper:
+            logging.info('Running LASSO with alpha value: {}'.format(str(alpha)))
+           
+            lasso = Lasso(alpha = alpha)  
+            lasso.fit(data_arr, target_arr)
+
+            logging.info('{}'.format(only_snp_data.columns))
+            important_features = only_snp_data.columns[np.absolute(lasso.coef_) > 0]
+            logging.info('{}'.format(important_features))
+            selected_len = len(important_features)
+            logging.info('Selected {} features.'.format(str(selected_len)))
+    
+            if selected_len > n_upper:
+                alpha += alpha_change
+                alpha_change = alpha_change / 2
+            elif selected_len < n_lower:
+                alpha -= alpha_change
+                alpha_change = alpha_change / 2
+
+        df = pd.DataFrame()
+        df['SNP'] = only_snp_data.columns.tolist()
+        df['lasso_coeff'] = lasso.coef_
+        df['lasso_score'] = np.absolute(lasso.coef_)
+        df['p_val'] = 0
+        df.reset_index(drop = True, inplace = True)
+        df.to_csv(out_name)
+    
+
     
 class FeatureSelector():
     # TODO: implement init
