@@ -398,9 +398,13 @@ def lasso(data, target, out_name, kwargs):
     n_selected_features = 50
     if 'n_selected_features' in kwargs.keys():
         n_selected_features = kwargs['n_selected_features']
+
+    tolerance = 0.1
+    if 'tolerance' in kwargs.keys():
+        tolerance = kwargs['tolerance']
         
-    n_upper = n_selected_features + n_selected_features / 10
-    n_lower = n_selected_features - n_selected_features / 10
+    n_upper = n_selected_features + n_selected_features * tolerance
+    n_lower = n_selected_features - n_selected_features * tolerance
 
     if kwargs['outcome'] == 'discrete':
         '''
@@ -457,9 +461,7 @@ def lasso(data, target, out_name, kwargs):
             lasso = Lasso(alpha = alpha)  
             lasso.fit(data_arr, target_arr)
 
-            logging.info('{}'.format(only_snp_data.columns))
             important_features = only_snp_data.columns[np.absolute(lasso.coef_) > 0]
-            logging.info('{}'.format(important_features))
             selected_len = len(important_features)
             logging.info('Selected {} features.'.format(str(selected_len)))
     
