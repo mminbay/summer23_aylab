@@ -1,12 +1,18 @@
 '''
 HOW TO DO NETWORK ANALYSIS (unweighted)
+STEP 0.
+    preprocessing snpassoc output file
+        use preprocessing file to format the snpassoc's output csv to be used in network analysis
+        just add the snpassoc output file's path and the output_file path into the function from 
+        preprocessing_network_analysis.py file and you will get a csv in the same directory
+        which will have the edges file. Check the example code under the comments
 STEP 1.
-    import the file. if in the same directory: 
-    import unweightedNetworkAnalysis as unet
+    importing the code file, if in the same directory: 
+        import unweightedNetworkAnalysis as unet
     if in a different directory:
-    import sys
-    sys.path.append('/path/to/networkAnalysis/')  # Replace with the actual path to the 'networkAnalysis' directory
-    import unweightedNetworkAnalysis as unet
+        import sys
+        sys.path.append('/path/to/networkAnalysis/')  # Replace with the actual path to the 'networkAnalysis' directory
+        import unweightedNetworkAnalysis as unet
 STEP 2.
     make a graph. Get info and plot it if  needed 
     follow the steps in the Step 2 section below.
@@ -114,15 +120,24 @@ You may need the following functions for network analysis:
 
 '''
 ############ YOUR CODE GOES HERE #############
-# example code provided
+# example code provided:
+
+from preprocessing_network_analysis import find_sig_snp_interactions as find_sig_snps
 import unweightedNetworkAnalysis as unet
+
+#### Pre processing ####
+# uncomment lines below to preprocess snpassoc data
+# snp_assoc_results = 'path/to/snpassoc/results.csv'
+# edges_file_path = 'path/to/save/edges/file.csv'
+# find_sig_snps(snp_assoc_results, edges_file_path)
+
 
 ## metrics for quick use:
 centrality_metrics = ['degree', 'harmonic', 'node_betweenness', 'edge_betweenness', 'pagerank']
 similarity_metrics = ['cosine', 'jaccard', 'katz']
 
 # making Graph
-edges_file_path = '../data/networkAnalysisData/randomNetworkAnalysisData_edges.csv'
+edges_file_path = '../data/networkAnalysisData/randomNetworkAnalysisData_edges.csv' # path may already be defined when preprocessing above
 source_col = 'SNP1'
 target_col = 'SNP2'
 
