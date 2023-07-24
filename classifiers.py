@@ -7,11 +7,13 @@ from imblearn import FunctionSampler
 from sklearn.base import BaseEstimator, TransformerMixin, ClassifierMixin
 from sklearn.ensemble import RandomForestClassifier
 from imblearn.over_sampling import SMOTE
+from imblearn.under_sampling import RandomUnderSampler
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, make_scorer, balanced_accuracy_score
 from skopt import BayesSearchCV
 from sklearn.linear_model import  SGDClassifier, LogisticRegression
 from sklearn.naive_bayes import BernoulliNB
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neural_network import MLPClassifier
 import sklearn.discriminant_analysis as sk
 from sklearn.svm import SVC
 from xgboost import XGBClassifier
@@ -22,6 +24,7 @@ from sklearn.utils._testing import ignore_warnings
 from imblearn.combine import SMOTETomek
 from sklearn.ensemble import StackingClassifier
 from sklearn.model_selection import cross_val_score
+from sklearn.utils import resample
 import re
 import os
 from ast import literal_eval
@@ -36,11 +39,14 @@ class MyClassifier(BaseEstimator, ClassifierMixin):
     '''
     Classifier wrapper. DO NOT CALL THIS DIRECTLY
     '''
-    def __init__(self, estimator, method, path, splits, run, n_estimators = 100, max_depth = 10, 
-    penalty = 'none', alpha = 0.01, n_neighbors = 5, solver = 'svd', shrinkage = 0,
-    kernel = 'linear', C = 1, gamma = 0.1, degree = 3, eta = 0.05, scale_pos_weight = 1,
-    min_samples_split = 2, min_samples_leaf = 1, l1_ratio = 0.15, leaf_size = 30,
-    subsample = 3, colsample_bytree = 5, min_child_weight = 3, class_weight = 0.5):
+    def __init__(
+        self, estimator, method, path, splits, run, n_estimators = 100, max_depth = 10, 
+        penalty = 'none', alpha = 0.01, n_neighbors = 5, solver = 'svd', shrinkage = 0,
+        kernel = 'linear', C = 1, gamma = 0.1, degree = 3, eta = 0.05, scale_pos_weight = 1,
+        min_samples_split = 2, min_samples_leaf = 1, l1_ratio = 0.15, leaf_size = 30,
+        subsample = 3, colsample_bytree = 5, min_child_weight = 3, class_weight = 0.5,
+        hidden_layer_sizes = (64, 32, 16, 8)
+    ):
 
         self.idx, self.method, self.estimator, self.splits = 0, method, estimator, splits
         self.max_depth, self.n_estimators = max_depth, n_estimators
@@ -53,6 +59,7 @@ class MyClassifier(BaseEstimator, ClassifierMixin):
         self.l1_ratio, self.leaf_size, self.class_weight = l1_ratio, leaf_size, class_weight
         self.subsample, self.colsample_bytree = subsample, colsample_bytree,
         self.run = run
+        self.hidden_layer_sizes = hidden_layer_sizes
 
 
         if self.estimator == 'rdforest':
@@ -96,6 +103,19 @@ class MyClassifier(BaseEstimator, ClassifierMixin):
             n_estimators = self.n_estimators, use_label_encoder =False, scale_pos_weight = self.scale_pos_weight)
             self.hyperParam = ['colsample_bytree', 'eta', 'max_depth', 'min_child_weight', 
             'n_estimators', 'scale_pos_weight', 'subsample']
+
+        elif self.estimator == 'mfnn':
+            self.classify = MLPClassifier(
+                hidden_layer_sizes = self.hidden_layer_sizes,
+                alpha = self.alpha,
+                solver = 'adam',
+                batch_size = 128,
+                max_iter = 100,
+                random_state = 42,
+                early_stopping = True,
+                n_iter_no_change = 5
+            )
+            self.hyperParam = ['alpha']
             
 
     def set_params(self, **params):
@@ -110,7 +130,6 @@ class MyClassifier(BaseEstimator, ClassifierMixin):
 
     @ignore_warnings(category=ConvergenceWarning)
     def fit(self, X, y):
-        #X,y = SMOTE(random_state=42).fit_resample(X,y)
         return self.classify.fit(X,y)
 
     def predict(self, X, y=None):
@@ -144,13 +163,15 @@ class ClassifierHelper():
     This is the actual class that you will be using, which wraps and automates k-fold cross
     validation with hyperparameter tuning.
     '''
-    def __init__(self, data, out_folder):
+    def __init__(self, train_data, test_data, out_folder):
         '''
         Arguments:
-            data (DataFrame) -- dataframe to run classifiers on. should only contain feature, target outcome, and ID_1 columns.
+            train_data (DataFrame) -- dataframe to train classifiers on. should only contain feature, target outcome, and ID_1 columns.
+            test_data (DataFrame) -- dataframe to test classifiers on. should only contain feature, target outcome, and ID_1 columns.
             out_folder (str) -- path to folder where this instance will write files to. created if doesn't exist.
         '''
-        self.data = data
+        self.train_data = train_data
+        self.test_data = test_data
         self.out_folder = out_folder
         if not os.path.exists(out_folder):
             os.makedirs(out_folder)
@@ -194,26 +215,25 @@ class ClassifierHelper():
             'subsample' : Real(0.01, 0.99, prior = 'log-uniform'), 'scale_pos_weight' : Integer(1,100),
             'colsample_bytree' : Real(0.01, 0.99, prior = 'log-uniform'), 
             'n_estimators':Integer(50, 500),  'min_child_weight' : Integer(1,100)}, 80
+        elif classifier == 'mfnn':
+            return {
+                'alpha': Real(1e-6, 1e-1, prior='log-uniform')
+            }, 50
         raise Exception('Unknown classifier: {}'.format(classifier))
-	
-    def resample(self, target_column):
-        '''
-        Imbalanced resampling using SMOTE.
 
-        Arguments:
-            target_column (str) -- outcome column in self.data. balancing will be made according to this.
-
-        Returns:
-            X (numpy.ndarray) -- balanced data for predictors
-            y (numpy.ndarray) -- balanced data for outcome
-        '''
-        x_data = self.data.drop(columns = ['ID_1', target_column]).to_numpy()
-        y_data = self.data[target_column].to_numpy()
-        X, y = SMOTETomek(random_state=42).fit_resample(x_data, y_data)
-        print(X.shape)
-        return X, y
-
-    def classify(self, target_column, n_runs, n_folds, classifier, method = 'default', balance_data = False):
+    def classify(
+        self, 
+        target_column, 
+        n_runs,
+        n_folds, 
+        classifier, 
+        method = 'default', 
+        oversample = False, 
+        undersample = False, 
+        sampling_strategy = None,
+        n_test_resamples = 1,
+        test_resample_size = 1.0,
+    ):
         '''
         Wrapper for running k-fold cross validation.
 
@@ -223,10 +243,22 @@ class ClassifierHelper():
             n_folds (int) -- number of cross validations in each run (k in k-fold cross validation).
             classifier (str) -- string identifier of the classifier to be used.
             method (str) -- i don't know what this is, but the code might break without it.
-            balance_data (bool) -- if True, will balance dataset during k-fold cross validation using SMOTE
+            oversample (bool) -- if True, will balance training data during k-fold cross validation using SMOTE. 
+            undersample (bool) -- if True, will balance training data during k-fold cross validation by undersampling
+            sampling_strategy (float) -- if oversampling or undersampling, will balance data so that target minority class matches this ratio
+            n_test_resamples (int) -- test the model after cross validation this many times with random samples from the test split.
+            test_resample_size (float) -- -- randomly samples (with replacements) this fraction from the test data instead of using it entirely during testing.
+            
         '''
-        X = self.data.drop(columns = ['ID_1', target_column]).to_numpy()
-        y = self.data[target_column].to_numpy()
+
+        if oversample and undersample:
+            raise Exception('Cannot oversample and undersample at the same time.')
+
+        if (oversample or undersample) and sampling_strategy == None:
+            raise Exception('Missing ratio for data balancing.')
+            
+        X_train = self.train_data.drop(columns = ['ID_1', target_column]).to_numpy()
+        y_train = self.train_data[target_column].to_numpy()
 
         logging.info('Attempting classification for {} with {}: {} runs of {}-fold cross-validation.'.format(target_column, classifier, n_runs, n_folds))
         
@@ -246,9 +278,19 @@ class ClassifierHelper():
         for i in range(n_runs):
             result_path = os.path.join(r_path, classifier + "_" + method + '_run_' + str(i + 1) + ".txt")
             open(result_path, "w").close() 
-            print('currently running: ' + classifier + ' with ' + method + ' repeat ' + str(i+1))
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, random_state=i+40)
-            _pipeline = make_pipeline(MyClassifier(estimator = classifier, method = method, splits = n_folds, path = self.out_folder, run = i + 1))
+            logging.info('Run {}:'.format(str(i)))
+            
+            myclassif = MyClassifier(estimator = classifier, method = method, splits = n_folds, path = self.out_folder, run = i + 1)
+            balancer = None
+            if undersample:
+                balancer = RandomUnderSampler(sampling_strategy = sampling_strategy, random_state = 42 + i)     
+            elif oversample:
+                balancer = SMOTE(sampling_strategy = sampling_strategy, random_state = 42 + i)
+
+            if balancer is None:
+                _pipeline = make_pipeline(myclassif)
+            else:
+                _pipeline = make_pipeline(balancer, myclassif)
             cv = StratifiedKFold(n_splits=n_folds, random_state=i+40, shuffle= True)
 
             parms, itr = ClassifierHelper.getParameters(classifier)
@@ -303,16 +345,28 @@ class ClassifierHelper():
                 Tester = SVC(**bestParam, random_state=0, max_iter=10000000)
             elif classifier == 'xgboost':
                 Tester = XGBClassifier(**bestParam, use_label_encoder = False)
+            elif classifier == 'mfnn':
+                Tester = MLPClassifier(**bestParam)
 
-            X_t, y_t = X_train, y_train
-            if balance_data:
-                X_t, y_t = SMOTE(random_state=42).fit_resample(X_t, y_t)
+            Tester.fit(X_train, y_train)
 
-            Tester.fit(X_t, y_t)
-            yp = Tester.predict(X_test)
+            for j in range(n_test_resamples):
+                size = len(self.test_data) * test_resample_size
+                test_data = resample(
+                    self.test_data,
+                    n_samples = size,
+                    random_state = 42 + j,
+                    stratify = self.test_data[target_column],
+                    replace = False
+                )
+                X_test = test_data.drop(columns = ['ID_1', target_column]).to_numpy()
+                y_test = test_data[target_column].to_numpy()
+                
+                yp = Tester.predict(X_test)
 
-            trainTest = open(train_test_path, "a")
-            confMatrix = confusion_matrix(y_test,yp)
-            trainTest.write(str(grid_imba.best_params_)+'\n')
-            trainTest.write(str(confMatrix).replace(' [', '').replace('[', '').replace(']', '') + '\n\n')
-            trainTest.close()
+                trainTest = open(train_test_path, "a")
+                confMatrix = confusion_matrix(y_test,yp)
+                trainTest.write('Run {}, test sample {}:'.format(str(i), str(j)))
+                trainTest.write(str(grid_imba.best_params_)+'\n')
+                trainTest.write(str(confMatrix).replace(' [', '').replace('[', '').replace(']', '') + '\n\n')
+                trainTest.close()
