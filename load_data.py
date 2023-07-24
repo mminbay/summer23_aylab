@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import pandas as pd
+import logging
 from ukbb_parser import create_dataset, get_chrom_raw_marker_data, create_ICD10_dataset
 from bgen.reader import BgenFile as bf
 import re
@@ -17,19 +18,25 @@ class DataLoader():
         genetics_folder = '/path/to/genetics/',
         genetics_format = 'ukb22828_c{}_b0_v3.bgen',
         imputed_ids_path = '/path/to/imputed/ids.csv',
-        out_folder = '/path/to/out_folder/'
+        out_folder = '/path/to/out_folder/',
+        verbose = False
     ):
         '''
         Arguments:
-        genetics_folder (str) -- path to the directory where this instance will look for .bgen files (imputed genetic info)
-        genetics_format (str) -- name format for .bgen files, where {} will be replaced by chromosome number. note the data field 
-        imputed_ids_path (str) -- path to the .csv file which contains the participant id's in the same order as they appear in the .bgen files
-        out_folder (str) -- path tho the directory where this instance will write files to
+            genetics_folder (str) -- path to the directory where this instance will look for .bgen files (imputed genetic info)
+            genetics_format (str) -- name format for .bgen files, where {} will be replaced by chromosome number. note the data field 
+            imputed_ids_path (str) -- path to the .csv file which contains the participant id's in the same order as they appear in the .bgen files
+            out_folder (str) -- path tho the directory where this instance will write files to
+            verbose (bool) -- if True, will log progress of imputed data fetching
         '''
         self.genetics_folder = genetics_folder
         self.genetics_format = genetics_format
         self.imputed_ids_path = imputed_ids_path
         self.out_folder = out_folder
+        self.verbose = verbose
+        
+        if verbose:
+            logging.basicConfig(filename= os.path.join(out_folder, 'data_loader.log'), encoding='utf-8', level=logging.DEBUG)
 
         # for later reuse with other types of data fields
         self.tables = {}
@@ -96,6 +103,8 @@ class DataLoader():
             self.chroms (list(int)) -- list of chromosomes 
             intervals (list(list(str))) -- nested list of intervals on each chromosome. intervals[i] is the list of intervals of chroms[i].
         '''
+        if self.verbose:
+            logging.info('Loading chroms and intervals from {}'.format(file))
         chroms, intervals = [], []
         prev_chrom, idx = -1, -1
         f = open(file, "r")
@@ -212,6 +221,9 @@ class DataLoader():
         '''
         ids_to_keep = set(pd.read_csv(data, usecols = ['ID_1'])['ID_1'].tolist()) # this takes way too long if you don't make it a set
         all_ids = pd.read_csv(self.imputed_ids_path, usecols = ['ID_1'])['ID_1'].tolist()
+        
+        if self.verbose:
+            logging.info('Getting imputed information for {} participants'.format(str(len(ids_to_keep))))
 
         # create list of kept ids in order 
         ordered_kept_ids = [eid for eid in all_ids if eid in ids_to_keep]
@@ -227,7 +239,11 @@ class DataLoader():
             current_intervals = intervals[i]
 
             if current_chrom in ignore or current_chrom not in keep:
+                if self.verbose:
+                    logging.info('Ignoring chromosome {} due to passed parameters'.format(str(current_chrom)))
                 continue
+
+            logging.info('Getting information on chromosome {}'.format(str(current_chrom)))
 
             rows = []
             indices = []
@@ -245,11 +261,16 @@ class DataLoader():
             current_interval = current_intervals[z]
             interval_start = int(current_interval.split('-')[0]) - extra
             interval_end = int(current_interval.split('-')[1]) + extra
+            if verbose:
+                logging.info('Looking for SNPs in gene interval: {}'.format(str(current_interval)))
 
             for var in bfile:
                 current_position = var.pos
+                logging.info('Found a SNP at {}'.format(str(current_position)))
                 no_intervals_left = False
                 while current_position > interval_end:
+                    if self.verbose:
+                        logging.info('SNP ahead of interval, shifting interval...')
                     z += 1
                     if z >= len(current_intervals):
                         no_intervals_left = True
@@ -257,12 +278,20 @@ class DataLoader():
                     current_interval = current_intervals[z]
                     interval_start = int(current_interval.split('-')[0]) - extra
                     interval_end = int(current_interval.split('-')[1]) + extra
+                    if self.verbose:
+                        logging.info('Looking for SNPs in gene interval: {}'.format(str(current_interval)))
                 if no_intervals_left:
+                    if self.verbose:
+                        logging.info('Ran out of intervals on {}'.format(current_chrom))
                     break
                 if current_position < interval_start:
+                    if self.verbose:
+                        logging.info('SNP before interval, checking next SNP')
                     continue
                 if (current_position >= interval_start) and (current_position <= interval_end):
                     variant = var.rsid
+                    if self.verbose:
+                        logging.info('{} is located in a search interval. Appending...'.format(variant))
                     if use_list:
                         if variant not in current_rsids:
                             continue
@@ -286,6 +315,8 @@ class DataLoader():
                     if get_alleles:
                         alleles.append(str(var.alleles))
                         minor_alleles.append(var.minor_allele)
+            if self.verbose:            
+                logging.info('Done looking in chromosome {}'.format(str(current_chrom)))
 
             df = pd.DataFrame(rows, index = indices, columns = ordered_kept_ids)
             df = df.transpose()
@@ -294,6 +325,8 @@ class DataLoader():
             if export:
                 out_file = os.path.join(self.out_folder, formatted_name + '.csv')
                 df.to_csv(out_file)
+                if self.verbose:
+                    logging.info('Exported chromosome {} as a .csv'.format(str(current_chrom)))
                 if get_alleles:
                     df_allele = pd.DataFrame()
                     df_allele['SNP'] = indices
