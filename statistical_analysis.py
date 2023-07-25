@@ -642,6 +642,7 @@ class Stat_Analyzer():
         max_items=5, 
         min_lift=2, 
         protective=False,
+        drop_pairs = True,
         out_file='arl.csv'
     ):
         '''
@@ -657,16 +658,21 @@ class Stat_Analyzer():
             max_items -- maximum number of item in the rules including both sides
             min_lift -- minimum value for lift for the rule to be considered
             protective -- if True, the rhs values will be flipped to find protective features
+            drop_pairs -- if True, columns containing 'pair:' will be dropped
             out_file -- name of output .txt file (no extension required)
         '''
         data = self.binOHCdata_withBase.copy(deep=True)
+        data.drop(columns = data.filter(regex = '^pair:').columns, inplace = True)
+        print(data.shape)
 
         data.drop(columns = continuous, inplace=True)
         # remove all columns with more than 2 unique values -- this ensures all features are binarized
         for col in data.columns:
             if len(data[col].unique()) > 2:
                 data.drop([col], axis=1, inplace=True)
-            
+
+        data = data.astype(bool)
+        
         result_folder = os.path.join(self.out_folder, 'association_rule_learning')
         if not os.path.exists(result_folder):
             os.makedirs(result_folder)
@@ -722,9 +728,9 @@ class Stat_Analyzer():
         res=sm.GLM(y, X.loc[:, X.columns != 'PHQ9_binary'], family = sm.families.Binomial(link = sm.families.links.logit())).fit()
 
         # res = sm.GLM(y, X, family = sm.families.Binomial(link = sm.families.links.logit())).fit()
-        self.display_regression_results(X.columns, res, out_file)
+        self.display_regression_results(X.columns, res, out_file, calc_odds = True)
 
-    def display_regression_results(self, variable, res, out_file):
+    def display_regression_results(self, variable, res, out_file, calc_odds = False):
         '''
         Prints regression results and outputs them as a .csv file
 
@@ -758,6 +764,8 @@ class Stat_Analyzer():
         )
         adjusted = fdr_correction(res.pvalues, alpha=0.05, method="indep")[1]
         df["adjusted pval"] = adjusted
+        if calc_odds:
+            df['odds_ratio'] = np.exp(df['coefficient'])
         df = df.sort_values(by="adjusted pval")
         
         result_folder = os.path.join(self.out_folder, 'regression_results')
