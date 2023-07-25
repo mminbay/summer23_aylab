@@ -18,7 +18,7 @@ import random
 ############# Functions for Plotting and Network Analyses #############
 
 # Function to plot the graph
-def plot_graph(G, path=None):
+def plot_graph(G, path=None, layout = 'spring'):
     """
     Plot the graph using the NetworkX library.
 
@@ -34,7 +34,12 @@ def plot_graph(G, path=None):
     Returns:
         None
     """
-    pos = nx.drawing.layout.circular_layout(G)
+    if layout == 'spring':
+        pos = nx.drawing.layout.spring_layout(G)
+    elif layout == 'circular':
+        pos = nx.drawing.layout.circular_layout(G)
+    else:
+        raise Exception('LETS GET ITTT')
     plt.figure(figsize=(7, 6))    # Specify the figure size
     # in the next line, nx.draw(...) had an error, changing it to nx.draw_networkx(...) fixes it
     nx.draw_networkx(
@@ -125,9 +130,9 @@ def visualize_communities(graph, communities, path=None):
     node_colors = assign_node_colors(graph, communities)
     color_legend = create_color_legend(node_colors)
 
-    plt.figure(figsize=(8, 8))
-    plt.subplots_adjust(top=5.5, bottom=0.1, right=2)  # modify the values here to move the plot up or down if legend overlaps it
-    nx.draw(graph, pos, with_labels=True, node_color=node_colors, cmap=plt.cm.rainbow)
+    plt.figure(figsize=(7, 7))
+    plt.subplots_adjust(top=1, bottom=0.1, right=0.7)  # modify the values here to move the plot up or down if legend overlaps it
+    nx.draw_networkx(graph, pos, with_labels=True, node_color=node_colors, cmap=plt.cm.rainbow)
     legend = create_legend(color_legend)
     legend.get_frame().set_linewidth(1.5)
     plt.show()
@@ -365,13 +370,14 @@ def get_similar_pairs(similarity_matrix, threshold):
 
     
 # prints the nodes with similarity scores higher than the threshold given. have to pass metric and threshold 
-def print_high_similarity(G, metric_name, similarity_matrix, similarity_threshold, KatzIndex=None, print_all=True):   
+def print_high_similarity(G, metric_name, similarity_matrix, similarity_threshold, KatzIndex=None, print_all=True):
+    nodes_list = list(G.nodes())
     for i in range(1,nx.number_of_nodes(G)): # graph indexing is from 1 and not 0
         for j in range(1,nx.number_of_nodes(G)):
             if metric_name == 'cosine':
-                similarity_matrix[i][j] = cosine_similarity(list(G.neighbors(i)), list(G.neighbors(j)))
+                similarity_matrix[i][j] = cosine_similarity(list(G.neighbors(nodes_list[i])), list(G.neighbors(nodes_list[j])))
             elif metric_name == 'jaccard':
-                similarity_matrix[i][j] = jaccard(list(G.neighbors(i)), list(G.neighbors(j)))
+                similarity_matrix[i][j] = jaccard(list(G.neighbors(nodes_list[i])), list(G.neighbors(nodes_list[j])))
             elif metric_name == 'katz':
                 similarity_matrix[i][j] = KatzIndex.run(i, j)
     similar_pairs = get_similar_pairs(similarity_matrix, similarity_threshold)
