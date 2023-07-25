@@ -19,11 +19,36 @@ from shared_objects import SharedNumpyArray, SharedPandasDataFrame
 This class is meant to be used to do feature selection after you have compiled your
 final dataset. Check an example usage at the end of this file.
 '''
+def add_snp_interactions(data_path, interactions_path, freq_threshold, verbose = False):
+    '''
+    Add SNP interactions as columns to a dataframe. A SNP interaction pair:rs1-rs2 is true for a sample if rs1 is true and rs2 is true for that sample. Interactions that are true for for less than freq_threshold samples will not be considered.
+
+    Arguments:
+        data_path (str) -- path to .csv dataframe to add the columns to.
+        interactions_path (str) -- path to the .csv file containing the interactions. this file should have SNP1 and SNP2 columns, where every row indicates an interaction. this file is usually outputted by preprocessing of network analysis.
+        freq_threshold (int) -- interactions that occur less than this number will not be included in the table
+        verbose (bool) -- if True, output a separate file that contains frequency information about all interactions
+    '''
+    data = pd.read_csv(data_path, index_col = 0)
+    interactions = pd.read_csv(interactions_path)
+
+    for i in range(len(interactions)):
+        snp1 = interactions.iloc[i]['SNP1']
+        snp2 = interactions.iloc[i]['SNP2']
+
+        interaction_column = (data[snp1] & data[snp2]).astype(int)
+        print(snp1, snp2, interaction_column.sum())
+        if interaction_column.sum() < freq_threshold:
+            continue
+        data['pair:' + snp1 + ':' + snp2] = interaction_column
+
+    data.to_csv(data_path.split('.')[0] + '_wpairs.csv')
+    
 def compile_snps(snps, factors, dir, out):
     '''
     Compile a dataframe of given list of SNPs across all chrom files. Output as .csv.
 
-    Arguments
+    Arguments:
         snps (set(str)) -- set of snps to be compiled.
         factors (list(str)) -- LIST of fix columns (Sex, ID_1, PHQ9_binary)
         dir (str) -- path to directory of chrom files. this directory should only contain .csv files of the chroms
