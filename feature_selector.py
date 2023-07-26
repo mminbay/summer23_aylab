@@ -19,82 +19,6 @@ from shared_objects import SharedNumpyArray, SharedPandasDataFrame
 This class is meant to be used to do feature selection after you have compiled your
 final dataset. Check an example usage at the end of this file.
 '''
-def add_snp_interactions(data_path, interactions_path, freq_threshold, verbose = False):
-    '''
-    Add SNP interactions as columns to a dataframe. A SNP interaction pair:rs1-rs2 is true for a sample if rs1 is true and rs2 is true for that sample. Interactions that are true for for less than freq_threshold samples will not be considered.
-
-    Arguments:
-        data_path (str) -- path to .csv dataframe to add the columns to.
-        interactions_path (str) -- path to the .csv file containing the interactions. this file should have SNP1 and SNP2 columns, where every row indicates an interaction. this file is usually outputted by preprocessing of network analysis.
-        freq_threshold (int) -- interactions that occur less than this number will not be included in the table
-        verbose (bool) -- if True, output a separate file that contains frequency information about all interactions
-    '''
-    data = pd.read_csv(data_path, index_col = 0)
-    interactions = pd.read_csv(interactions_path)
-
-    for i in range(len(interactions)):
-        snp1 = interactions.iloc[i]['SNP1']
-        snp2 = interactions.iloc[i]['SNP2']
-
-        interaction_column = (data[snp1] & data[snp2]).astype(int)
-        print(snp1, snp2, interaction_column.sum())
-        if interaction_column.sum() < freq_threshold:
-            continue
-        data['pair:' + snp1 + ':' + snp2] = interaction_column
-
-    data.to_csv(data_path.split('.')[0] + '_wpairs.csv')
-    
-def compile_snps(snps, factors, dir, out):
-    '''
-    Compile a dataframe of given list of SNPs across all chrom files. Output as .csv.
-
-    Arguments:
-        snps (set(str)) -- set of snps to be compiled.
-        factors (list(str)) -- LIST of fix columns (Sex, ID_1, PHQ9_binary)
-        dir (str) -- path to directory of chrom files. this directory should only contain .csv files of the chroms
-        out_file (str) -- path to folder to output the result
-    '''
-    logging.basicConfig(filename= os.path.join(os.path.dirname(out), 'compiler.log'), encoding='utf-8', level=logging.DEBUG)
-    files = [file for file in os.listdir(dir) if '.csv' in file]
-    individual_args = [(os.path.join(dir, file), snps, factors) for file in files]
-    
-    with Pool() as pool:
-        results = pool.map(compile_wrapper, individual_args)
-
-    final = pd.concat(results, axis = 1)
-    final = final.loc[:,~final.columns.duplicated()].copy()
-
-    final.to_csv(os.path.join(out))
-        
-def compile_wrapper(args):
-    '''
-    DO NOT CALL DIRECTLY
-    Used for parallelization in compiling a list of SNPs from all chrom files.
-
-    Arguments:
-        args (tuple) -- a tuple that should contain two fields
-            args[0] (str) -- path to chrom .csv file
-            args[1] (set(str)) -- set of SNP columns to be compiled
-            args[2] (list(str)) -- list of fix columns (Sex, ID_1, PHQ9_binary)
-    '''
-    logging.info('pid: {}. Working on {}.'.format(os.getpid(), args[0]))
-    df = pd.read_csv(args[0], index_col = 0)
-    snp_set = set(df.columns.tolist())
-    snps_present = args[1].intersection(snp_set)
-    logging.info('pid: {}. Found {} SNPs on {}.'.format(os.getpid(), str(len(snps_present)), args[0]))
-    df.sort_values('ID_1', inplace = True)
-    result = []
-    sum_na = 0
-    for snp in snps_present:
-        this_na = df[snp].isna().sum()
-        sum_na += this_na
-        logging.info('{} has {} NaN values'.format(snp, str(this_na)))
-        result.append(df[snp])
-    for col in args[2]:
-        result.append(df[col])
-    logging.info('{} has {} NaN in total out of {}'.format(os.path.basename(args[0]), str(sum_na), len(df.index)))
-    return pd.concat(result, axis = 1)
-
 def fs_wrapper(args):
     '''
     DO NOT CALL DIRECTLY
@@ -192,8 +116,6 @@ def chisquare(data, target, out_name, kwargs):
     df["chi2_score"] = [result[0]['score'] for result in results]
     df["p_val"] = [result[0]['p_val'] for result in results]
     df['frequency'] = [result[2] for result in results]
-    # df.sort_values(by="chi2_score", inplace=True, ascending = False)
-
     df.to_csv(out_name)
 
 def infogain(data, target, out_name, kwargs):
@@ -233,9 +155,7 @@ def infogain(data, target, out_name, kwargs):
     df["SNP"] = [result[1] for result in results]
     df["infogain_score"] = [result[0]['score'] for result in results]
     df['frequency'] = [result[2] for result in results]
-    df['p_val'] = 0
-    # df.sort_values(by="infogain_score", inplace=True, ascending = False)
-    
+    df['p_val'] = np.nan
     df.to_csv(out_name)
 
 def mann_whitney_u(data, target, out_name, kwargs):
@@ -278,8 +198,6 @@ def mann_whitney_u(data, target, out_name, kwargs):
     df["mwu_score"] = [min(result[0]['score_1'], result[0]['score_2']) for result in results]
     df["p_val"] = [result[0]['p_val'] for result in results]
     df['frequency'] = [result[2] for result in results]
-    # df.sort_values(by="u_min", inplace=True)
-    
     df.to_csv(out_name)
 
 def ttest(data, target, out_name, kwargs):
@@ -321,8 +239,6 @@ def ttest(data, target, out_name, kwargs):
     df['ttest_score'] = [abs(result[0]['score']) for result in results]
     df["p_val"] = [result[0]['p_val'] for result in results]
     df['frequency'] = [result[2] for result in results]
-    # df.sort_values(by="u_min", inplace=True)
-    
     df.to_csv(out_name)
 
 def mrmr(data, target, out_name, kwargs):
@@ -355,7 +271,7 @@ def mrmr(data, target, out_name, kwargs):
     df = pd.DataFrame()
     df['SNP'] = only_snp_data.columns.tolist()
     df['mrmr_score'] = 0
-    df['p_val'] = 0
+    df['p_val'] = np.nan
     df.reset_index(drop = True, inplace = True)
     df.loc[F, 'mrmr_score'] = 1
     df.to_csv(out_name)
@@ -392,7 +308,7 @@ def jmi(data, target, out_name, kwargs):
     df = pd.DataFrame()
     df['SNP'] = only_snp_data.columns.tolist()
     df['jmi_score'] = 0
-    df['p_val'] = 0
+    df['p_val'] = np.nan
     df.reset_index(drop = True, inplace = True)
     df.loc[F, 'jmi_score'] = 1
     df.to_csv(out_name)
@@ -470,7 +386,7 @@ def lasso(data, target, out_name, kwargs):
         df['SNP'] = only_snp_data.columns.tolist()
         df['lasso_coeff'] = lasso.coef_[0]
         df['lasso_score'] = np.absolute(lasso.coef_[0])
-        df['p_val'] = 0
+        df['p_val'] = np.nan
         df.reset_index(drop = True, inplace = True)
         df.to_csv(out_name)
 
@@ -501,11 +417,9 @@ def lasso(data, target, out_name, kwargs):
         df['SNP'] = only_snp_data.columns.tolist()
         df['lasso_coeff'] = lasso.coef_
         df['lasso_score'] = np.absolute(lasso.coef_)
-        df['p_val'] = 0
+        df['p_val'] = np.nan
         df.reset_index(drop = True, inplace = True)
         df.to_csv(out_name)
-    
-
     
 class FeatureSelector():
     # TODO: implement init
