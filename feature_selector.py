@@ -88,7 +88,13 @@ def chisquare(data, target, out_name, kwargs):
         data (DataFrame) -- dataset
         target (str) -- target column label in dataset
         out_name (str) -- path where the results will be outputted
+        kwargs (dict(str: any)) -- dictionary of keyword arguments. accepted arguments are:
+            correction ('fdr', 'bonferroni') -- p-value correction method to use. defaults to fdr
     '''
+    correction = 'fdr'
+    if 'correction' in kwargs.keys():
+        correction = kwargs['correction']
+    
     start_time = time.time()
     logging.info('PARENT --- Started rounds of feature selection at: ' + time.ctime())
     target_arr = data[target].to_numpy().astype('int')
@@ -115,6 +121,8 @@ def chisquare(data, target, out_name, kwargs):
     df["SNP"] = [result[1] for result in results]
     df["chi2_score"] = [result[0]['score'] for result in results]
     df["p_val"] = [result[0]['p_val'] for result in results]
+    if correction == 'fdr':
+        df['adjusted_p_val'] = fdr_correction(df['p_val'], alpha = 0.05, method= "indep")[1]
     df['frequency'] = [result[2] for result in results]
     df.to_csv(out_name)
 
@@ -127,7 +135,8 @@ def infogain(data, target, out_name, kwargs):
     Arguments:
         data (DataFrame) -- dataset
         target (str) -- target column label in dataset
-        outname (str) -- path where the results will be outputted
+        outname (str) -- path where the results will be outputted      
+        kwargs (dict(str: any)) -- dictionary of keyword arguments. currently no use
     '''
     start_time = time.time()
     logging.info('PARENT --- Started rounds of feature selection at: ' + time.ctime())
@@ -155,7 +164,6 @@ def infogain(data, target, out_name, kwargs):
     df["SNP"] = [result[1] for result in results]
     df["infogain_score"] = [result[0]['score'] for result in results]
     df['frequency'] = [result[2] for result in results]
-    df['p_val'] = np.nan
     df.to_csv(out_name)
 
 def mann_whitney_u(data, target, out_name, kwargs):
@@ -168,7 +176,13 @@ def mann_whitney_u(data, target, out_name, kwargs):
         data (DataFrame) -- dataset
         target (str) -- target column label in dataset
         outname (str) -- path where the results will be outputted
+        kwargs (dict(str: any)) -- dictionary of keyword arguments. accepted arguments are:
+            correction ('fdr', 'bonferroni') -- p-value correction method to use. defaults to fdr
     '''
+    correction = 'fdr'
+    if 'correction' in kwargs.keys():
+        correction = kwargs['correction']
+        
     start_time = time.time()
     logging.info('PARENT --- Started rounds of feature selection at: ' + time.ctime())
     target_arr = data[target].to_numpy().astype('int')
@@ -197,6 +211,8 @@ def mann_whitney_u(data, target, out_name, kwargs):
     df["mwu_2"] = [result[0]['score_2'] for result in results]
     df["mwu_score"] = [min(result[0]['score_1'], result[0]['score_2']) for result in results]
     df["p_val"] = [result[0]['p_val'] for result in results]
+    if correction == 'fdr':
+        df['adjusted_p_val'] = fdr_correction(df['p_val'], alpha = 0.05, method= "indep")[1]
     df['frequency'] = [result[2] for result in results]
     df.to_csv(out_name)
 
@@ -210,7 +226,13 @@ def ttest(data, target, out_name, kwargs):
         data (DataFrame) -- dataset
         target (str) -- target column label in dataset
         outname (str) -- path where the results will be outputted
+        kwargs (dict(str: any)) -- dictionary of keyword arguments. accepted arguments are:
+            correction ('fdr', 'bonferroni') -- p-value correction method to use. defaults to fdr
     '''
+    correction = 'fdr'
+    if 'correction' in kwargs.keys():
+        correction = kwargs['correction']
+        
     start_time = time.time()
     logging.info('PARENT --- Started rounds of feature selection at: ' + time.ctime())
     target_arr = data[target].to_numpy().astype('int')
@@ -238,6 +260,8 @@ def ttest(data, target, out_name, kwargs):
     df['t_statistic'] = [result[0]['score'] for result in results]
     df['ttest_score'] = [abs(result[0]['score']) for result in results]
     df["p_val"] = [result[0]['p_val'] for result in results]
+    if correction == 'fdr':
+        df['adjusted_p_val'] = fdr_correction(df['p_val'], alpha = 0.05, method= "indep")[1]
     df['frequency'] = [result[2] for result in results]
     df.to_csv(out_name)
 
@@ -271,7 +295,6 @@ def mrmr(data, target, out_name, kwargs):
     df = pd.DataFrame()
     df['SNP'] = only_snp_data.columns.tolist()
     df['mrmr_score'] = 0
-    df['p_val'] = np.nan
     df.reset_index(drop = True, inplace = True)
     df.loc[F, 'mrmr_score'] = 1
     df.to_csv(out_name)
@@ -308,7 +331,7 @@ def jmi(data, target, out_name, kwargs):
     df = pd.DataFrame()
     df['SNP'] = only_snp_data.columns.tolist()
     df['jmi_score'] = 0
-    df['p_val'] = np.nan
+    
     df.reset_index(drop = True, inplace = True)
     df.loc[F, 'jmi_score'] = 1
     df.to_csv(out_name)
@@ -386,7 +409,6 @@ def lasso(data, target, out_name, kwargs):
         df['SNP'] = only_snp_data.columns.tolist()
         df['lasso_coeff'] = lasso.coef_[0]
         df['lasso_score'] = np.absolute(lasso.coef_[0])
-        df['p_val'] = np.nan
         df.reset_index(drop = True, inplace = True)
         df.to_csv(out_name)
 
@@ -417,7 +439,6 @@ def lasso(data, target, out_name, kwargs):
         df['SNP'] = only_snp_data.columns.tolist()
         df['lasso_coeff'] = lasso.coef_
         df['lasso_score'] = np.absolute(lasso.coef_)
-        df['p_val'] = np.nan
         df.reset_index(drop = True, inplace = True)
         df.to_csv(out_name)
     
@@ -629,7 +650,10 @@ class FeatureSelector():
                 raise Exception('SNPs are not in order in {}'.format(file))
             target_column = target_format.format(test_name)
             final[test_and_number + '_score'] = curr_file[target_column]
-            final[test_and_number + '_p_val'] = curr_file['p_val']
+            if 'p_val' in curr_file.columns:
+                final[test_and_number + '_p_val'] = curr_file['p_val']
+            if 'adjusted_p_val' in curr_file.columns:
+                final[test_and_number + '_adjusted_p_val'] = curr_file['adjusted_p_val']
 
         column_format = '{}_{}_score'
         for snp in final['SNP']:

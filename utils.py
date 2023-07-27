@@ -5,6 +5,28 @@ from sklearn.model_selection import train_test_split
 import multiprocessing as mp
 from multiprocessing import pool
 
+def compile_fs_results(dir, identifier = None, output_name = 'compiled.csv'):
+    '''
+    Compile feature selection results from different folders in a directory. This function assumes that you have created multiple FeatureSelector object for feature selection, which created their separate directories in a common directory. It is also assumed that no folder in this directory is shared by two FS objects, as in, a single folder will only contain a single summary .csv file and a single bootstraps .csv file, and all the summary files have the same columns with no duplicates. Outputs the results at the given directory with the provided output name
+
+    Arguments:
+        dir (str) -- path to directory to look for feature selector directories at.
+        identifier (str) -- only look at directories whose name contains this substring. useful if you outputted multiple feature selection directories (e.g. chi2 and t-test) to the same parent directory.
+        output_name (str) -- name of compiled output file
+    '''
+    if identifier is None:
+        folder_paths = [os.path.join(dir, folder) for folder in os.listdir(dir) if os.path.isdir(os.path.join(dir, folder))]
+    else:
+        folder_paths = [os.path.join(dir, folder) for folder in os.listdir(dir) if os.path.isdir(os.path.join(dir, folder)) and identifier in folder]
+
+    dfs = []
+    for path in folder_paths:
+        file = [file for file in os.listdir(path) if '.csv' in file and 'bootstraps' not in file][0]
+        df = pd.read_csv(os.path.join(path, file), index_col = 0)
+        files.append(df)
+    df = pd.concat(dfs)
+    df.to_csv(os.path.join(dir, output_name))
+    
 def add_snp_interactions(data_path, interactions_path, freq_threshold, verbose = False):
     '''
     Add SNP interactions as columns to a dataframe. A SNP interaction pair:rs1-rs2 is true for a sample if rs1 is true and rs2 is true for that sample. Interactions that are true for for less than freq_threshold samples will not be considered.
@@ -26,7 +48,7 @@ def add_snp_interactions(data_path, interactions_path, freq_threshold, verbose =
         print(snp1, snp2, interaction_column.sum())
         if interaction_column.sum() < freq_threshold:
             continue
-        data['pair:' + snp1 + ':' + snp2] = interaction_column
+        data['pair:' + snp1 + '-' + snp2] = interaction_column
 
     data.to_csv(data_path.split('.')[0] + '_wpairs.csv')
     
@@ -81,7 +103,7 @@ def compile_wrapper(args):
     logging.info('{} has {} NaN in total out of {}'.format(os.path.basename(args[0]), str(sum_na), len(df.index)))
     return pd.concat(result, axis = 1)
 
-def train_test_split(path, column, test_size):
+def train_test(path, column, test_size):
     '''
     Split given dataset to train and test sets, stratified. Output both as .csv
 
