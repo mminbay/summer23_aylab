@@ -6,7 +6,7 @@ This repository contains information about the codebase and how to use it.
 
 If you will be running this code on Colgate's Turing Cluster, it (at the time of writing this) already has a shared `AyLab` directory, which contains a conda installation with all the required dependencies for this codebase. Make sure it is activated before you run any code.
 ```
-$ source /shared/devenvs/AyLab/conda/bin/activate
+$ source /datalake/AyLab/conda_dev_envs/summer23_env/bin/activate
 ```
 You can check which conda installation you are using at any time with the command `which conda`.  
 ### Dependencies – Personal Device
