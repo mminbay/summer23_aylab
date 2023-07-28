@@ -1,33 +1,37 @@
-import os
-import numpy as np
-import statsmodels.formula.api as smf
-from linearmodels.iv import IV2SLS
-import pandas as pd
-import statsmodels
-import statsmodels.api as sm
-import statsmodels.genmod.families.links as links
-from statsmodels.stats.mediation import Mediation
 import bioinfokit.analys
-from mne.stats import fdr_correction
-import researchpy as rp
-from statsmodels.stats.outliers_influence import variance_inflation_factor
-import matplotlib.pyplot as plt
-import seaborn as sns
-from statsmodels.genmod.generalized_linear_model import GLM, SET_USE_BIC_LLF
-from statsmodels.genmod import families
-from rpy2.robjects.packages import importr
-from rpy2.robjects import r, pandas2ri, numpy2ri
-numpy2ri.activate()
-from rpy2.robjects.conversion import localconverter
-import rpy2.robjects as ro
 import itertools
-from utilities import relabel  # hardcoded. relabel functional will be updated when anova needed
-from scipy.stats import sem
-from scipy import stats
-import random
+from linearmodels.iv import IV2SLS
+import matplotlib.pyplot as plt
 from mlxtend.frequent_patterns import apriori
 from mlxtend.frequent_patterns import association_rules
+from mne.stats import fdr_correction
 import networkx as nx
+import numpy as np
+import os
+import pandas as pd
+import random
+import researchpy as rp
+from rpy2.robjects.packages import importr
+from rpy2.robjects import r, pandas2ri, numpy2ri
+import rpy2.robjects as ro
+numpy2ri.activate()
+from rpy2.robjects.conversion import localconverter
+from scipy.stats import sem
+from scipy import stats
+import scikit_posthocs as sp
+import seaborn as sns
+import statsmodels
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+import statsmodels.genmod.families.links as links
+from statsmodels.genmod.generalized_linear_model import GLM, SET_USE_BIC_LLF
+from statsmodels.genmod import families
+from statsmodels.stats.multicomp import MultiComparison
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+from statsmodels.stats.mediation import Mediation
+from statsmodels.stats.multicomp import pairwise_tukeyhsd
+from statsmodels.stats.multitest import multipletests
+from utilities import relabel  # hardcoded. relabel functional will be updated when anova needed
 
 '''
 This class is meant to take care of all your statistical analysis. 
@@ -38,30 +42,43 @@ class Stat_Analyzer():
     # TODO: implement!
     def __init__(
         self,
-        binOHCdata,
-        binOHCdata_withBase,
-        nonbinOHCdata,
-        binnonOHCdata,
-        nonbinnonOHCdata,
-        r_path,
-        out_folder
+        data,
+        bin_outcome,
+        cont_outcome,
+        out_folder,
+        ohe_columns = [],
+        normalize_columns = [],
+        r_path = None,        
     ):
         '''
         Arguments:
-            binOHCdata -- dataframe to be analyzed, where categorical features are OHC'd and outcome is binarized
-            binOHCdata_withBase -- dataframe that's the same as binOHCdata, but does not have the baseline for the OHC removed. Used in ARL only
-            nonbinOHCdata -- dataframe to be analyzed, where categorical features are OHC'd and outcome is continuous
-            binnonOHCdata -- dataframe to be analyzed, where categorical features are not OHC'd and outcome is binarized
-            nonbinnonOHCdata -- dataframe to be analyzed, where categorical features are not OHC'd and outcome is continuous
-            r_path -- path to directory containing Rscripts that are needed for some statistical analysis
-            out_folder -- where this instance will output results
+            data (DataFrame) -- dataframe to be analyzed. this should only contain the ID_1 columns, feature columns, and outcome columns. features should be normalized but not one-hot encoded.
+            bin_outcome (str) -- column label of the binarized outcome on the dataframe.
+            cont_outcome (str) -- column label of the continuous outcome on the dataframe.
+            out_folder (str) -- where this instance will output results
+            ohe_columns (list(str)) -- column identifiers to 
+            r_path (str) -- path to directory containing Rscripts that are needed for some statistical analysis
 
         '''
-        self.binOHCdata = binOHCdata
-        self.binOHCdata_withBase = binOHCdata_withBase
-        self.nonbinOHCdata = nonbinOHCdata
-        self.binnonOHCdata = binnonOHCdata
-        self.nonbinnonOHCdata = nonbinnonOHCdata
+        for col in normalize_columns:
+            min_val = data[col].min()
+            max_val = data[col].max()
+            data[col] = (data[col] - min_val) / (max_val - min_val)
+        
+        bin = data.drop(columns = [cont_outcome])
+        cont = data.drop(columns = [bin_outcome])
+        bin_ohc = pd.get_dummies(bin, columns = ohe_columns, drop_first = True)
+        bin_ohc_wbase = pd.get_dummies(bin, columns = ohe_columns)
+        cont_ohc = pd.get_dummies(cont, columns = ohe_columns)
+
+        self.bin_outcome = bin_outcome
+        self.cont_outcome = cont_outcome
+        
+        self.bin_ohc = bin_ohc
+        self.bin_ohc_wbase = bin_ohc_wbase
+        self.cont_ohc = cont_ohc
+        self.bin = bin
+        self.cont = cont
         self.r_path = r_path
         self.out_folder = out_folder
 
@@ -71,496 +88,135 @@ class Stat_Analyzer():
         self.logisticRegression = dict()
         self.oneANOVA = dict()
         self.twoANOVA = dict()
-    
-    def anova(
+
+    def one_way_anova(
         self,
-        dep,
         indep,
-        continuous = [],
-        alpha = 0.05,
-        one_way = True,
-        follow_up = False,
-        one_vs_other = dict(),
-        one_vs_another = dict()
+        out_file = None
     ):
-        '''
-        Conduct an ANOVA analysis -- either one or two way -- on continuous, non OHC'd data between the dependent
-        and independent variables passed. If there is signifcant effect found, conduct a follow up test. The function
-        checks for the ANOVA assumption and provide alternative tests such as Kruskal-Wallis H.
+        if out_file is None:
+            out_file = '{}_one_way_anova.txt'.format(indep)
 
-        Arguments:
-            dep -- dependent variable, or outcome label of your study
-            indep -- independent variable, or list of two independent variables (depending on one-way or two-way)
-            continuous -- list of continuous variables. these will be dropped
-            alpha -- minimum value for the p-value for the effect to be significant
-            one_way -- if True, conduct one-way ANOVA. otherwise, conduct two-way ANOVA
-            follow_up -- if True, conduct follow up tests regardless of p-value
-            one_vs_other -- i dont know
-            one_vs_another -- i dont know either
-        '''
-        data = self.nonbinnonOHCdata.copy(deep = True)
-        data.columns = data.columns.str.replace(' ', '_')
-        data.columns = data.columns.str.replace('.', '_')
-        data.drop(columns = continuous, inplace = True)
-        OGdata = data.copy(deep = True)
-
-        for var in oneVsOther.keys():
-            data.loc[data[var] != oneVsOther[var], var] = 'other'
-            #newName = var+'_oneVsRest_'+str(oneVsOther[var])
-            newName = var+'_'+str(oneVsOther[var])
-            data.rename(columns = {var:newName}, inplace = True)
-            if indep == var:
-                indep = newName
-            elif var in indep:
-                indep.remove(var)
-                indep.append(newName)
+        result_folder = os.path.join(self.out_folder, 'one_way_anova')
+        if not os.path.exists(result_folder):
+            os.makedirs(result_folder)
         
-        for var in oneVsAnother.keys():
-            d1 = data[data[var] == oneVsAnother[var][0]]
-            d2 = data[data[var] == oneVsAnother[var][1]]
-            data = pd.concat([d1,d2])
-            newName = var+'_'+str(oneVsAnother[var][0])+'Vs'+str(oneVsAnother[var][1])
-            data.rename(columns = {var:newName}, inplace = True)
-            if indep == var:
-                indep = newName
-            elif var in indep:
-                indep.remove(var)
-                indep.append(newName)
-
-        if oneWay:
-            if (type(indep) == list):
-                indep = indep[0]
-            if not oneVsOther:
-                data = data.astype({indep: 'int64'})
-            else:
-                data = data.astype({indep: 'str'})
-            try:    
-                return self.__one_way_anova(data, dep, indep, alpha, False, follow_up)
-            except ValueError:
-                return
-        else:
-            if not oneVsOther:
-                data = data.astype({indep[0]:'int64'})
-                data = data.astype({indep[1]:'int64'})
-            else:
-                data = data.astype({indep[0]:'str'})
-                data = data.astype({indep[1]:'str'})
-            return self.__two_way_anova(data, dep, indep, alpha, False, follow_up, OGdata)
-
-    def __one_way_anova(self, data, dep, indep, alpha, between, followUp):
-        results = dict()
-        one_way_anova_folder = os.path.join(self.out_folder, 'one_way_ANOVA')
-        if not os.path.exists(one_way_anova_folder):
-            os.makedirs(one_way_anova_folder)
-
-        print(indep)
-        #new_indep=self.relabel(indep[:indep.find('_oneVsRest')+1]+indep[indep.find('oneVsRest')+len('oneVsRest')+1:])
-        new_indep=relabel(indep)
-        print(new_indep)
-        #new_indep=new_indep[:new_indep.rfind('_')+1]+'oneVsRest'+new_indep[new_indep.rfind('_'):]
-        data2=data.rename(columns={indep:new_indep},inplace=False)
-        indep=new_indep
-
-        indep_folder = os.path.join(one_way_anova_folder, indep)
-        if not os.path.exists(indep_folder):
-            os.makedirs(indep_folder)
-
-        formula = dep + ' ~ C(' + indep + ')'
-        oneWayANOVA = open(os.path.join(indep_folder, 'oneWayANOVA_summary.txt'), 'w')
-        oneWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
+        data = self.cont_ohc.copy(deep = True)
+        target = self.cont_outcome
         
-        #Create a box plot for outliers detection
+        # One-way ANOVA assumptions
+        # 1. Independence - Assumed to be met as each observation is independent.
+        # 2. Normality - Test the normality assumption using Shapiro-Wilk test or visual inspection (e.g., Q-Q plot).
+        # 3. Homogeneity of Variance - Test the homogeneity of variance using Levene's test or visual inspection (e.g., boxplot).
         
-        data = data2[[indep, dep]]
-        colors = ['#808080']
-        box = sns.boxplot(x=indep, y=dep, data=data, palette=colors)
-        fig = box.get_figure()
-        fig.savefig(os.path.join(indep_folder, 'oneWayANOVA_boxPlot.png'))
-        plt.close()
+        # Check normality assumption using Shapiro-Wilk test
+
+        f = open(os.path.join(result_folder, out_file), "w+")
+        f.write("Shapiro-Wilk Test for Normality:")
+        for group, group_data in data.groupby(indep):
+            f.write(f"Group {group}: p-value = {stats.shapiro(group_data[target])[1]:.4f}")
         
-        #Create a bar plot
-
-        sns.set(rc = {'figure.figsize':(15,10)})
-        sns.set(font_scale = 1.5)
-        sns.set_style('whitegrid')
-        fig, bar = plt.subplots()
+        # Check homogeneity of variance assumption using Levene's test
+        print("\nLevene's Test for Homogeneity of Variance:")
+        grouped_data = [group_data[target].values for _, group_data in data.groupby(indep)]
+        f.write(f"p-value = {stats.levene(*grouped_data)[1]:.4f}")
         
-        colors = ['#808080']
+        # Perform one-way ANOVA
+        f.write("\nOne-Way ANOVA:\n")
+        model = sm.formula.ols('{} ~ {}'.format(target, indep), data=data).fit()
+        anova_table = sm.stats.anova_lm(model)
+        f.write(anova_table.to_string())
         
-        if data2[indep[0]].isin(['other']).any():
-            for i in range(len(data2)):
-                if data2[indep[0]].iat[i]!='other':
-                    data2[indep[0]].iat[i]=indep[0][indep[0].rfind('_')+1:]
-
-        sns.barplot(x=indep, ax = bar, y=dep, data=data2, palette = colors, capsize=.1)
-        width = 0.3
-
-        num_var2 = len(data[indep].unique())
-        hatches = itertools.cycle(['+', 'x', '-', '/', '//', '\\', '*', 'o', 'O', '.'])
-
-        '''
-        for i, patch in enumerate(bar.patches):
-            # Set a different hatch for each bar
-            if i % num_var2 == 0:
-                hatch = next(hatches)
-            patch.set_hatch(hatch)
-        '''
-
-        for patch in bar.patches:
-            current_width = patch.get_width()
-            diff = current_width - width
-            patch.set_width(width)
-            patch.set_x(patch.get_x() + diff * .5)
-            patch.set_edgecolor('#000000')
-        fig = bar.get_figure()
-        fig.savefig(os.path.join(indep_folder, 'oneWayANOVA_barPlot.png'))
-        plt.close()
-
-        #Conducting the ANOVA test
-        oneWayANOVA.write('Results for one way ANOVA between ' + indep + ' and ' + dep + ' are: \n\n')
-        res = bioinfokit.analys.stat()
-        res.anova_stat(df=data, res_var=dep, anova_model=formula)
-        asummary = res.anova_summary.to_string(header=True, index=True)
-        oneWayANOVA.write(asummary + '\n')
-        oneWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
-        results['ANOVA_Results'] = res.anova_summary
-
-        #Follow-up Test TukeyTest
-        if (res.anova_summary.iloc[0,4] > alpha) and (not followUp):
-            oneWayANOVA.write('The p-value is higher than alpha; hence, no follow-up test was conducted\n')
-        else:
-            oneWayANOVA.write('Results for follow-up Tukey test between ' + indep + ' and ' + dep + ' are: \n\n')
-            if len(data[indep].value_counts()) <= 2:
-                oneWayANOVA.write('Only two groups. No follow up test was conducted\n')
-            else:
-                followUp = bioinfokit.analys.stat()
-                followUp.tukey_hsd(df=data, res_var=dep, xfac_var=indep, anova_model=formula)
-                fSummary = followUp.tukey_summary.to_string(header=True, index=True)
-                oneWayANOVA.write(fSummary + '\n')
-                results['Tukey_Results'] = followUp.tukey_summary
-        oneWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
-            
-
-        #histograms and QQ-plot for Normality detection
-        sm.qqplot(res.anova_std_residuals, line='45')
-        plt.xlabel("Theoretical Quantiles")
-        plt.ylabel("Standardized Residuals")
-        plt.savefig(os.path.join(indep_folder, 'oneWayANOVA_qqPlot.png'))
-        plt.close()
-
-        plt.hist(res.anova_model_out.resid, bins='auto', histtype='bar', ec='k') 
-        plt.xlabel("Residuals")
-        plt.ylabel('Frequency')
-        plt.savefig(os.path.join(indep_folder, 'oneWayANOVA_histogram.png'))
-        plt.close()
-
-        #Shapiro-Wilk Test for Normality
-        w, pvalue = stats.shapiro(res.anova_model_out.resid)
-        oneWayANOVA.write('Results for Shapiro-Wilk test to check for normality are: \n\n')
-        oneWayANOVA.write('w is: ' + str(w) + '/ p-value is: ' + str(pvalue) + '\n')
-        oneWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
-        results['Shaprio-Wilk_Results'] = (w, pvalue)
-
-        #Check for equality of varianve using Levene's test
-        oneWayANOVA.write("Results for Levene's test to check for equality of variance are: \n\n")
-        eqOfVar = bioinfokit.analys.stat()
-        eqOfVar.levene(df=data, res_var=dep, xfac_var=indep)
-        eqOfVarSummary = eqOfVar.levene_summary.to_string(header=True, index=False)
-        oneWayANOVA.write(eqOfVarSummary + '\n')
-        oneWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
-        results['Levene_Results'] = eqOfVar.levene_summary
-
-        #The Kruskal-Wallis H test
-        groups = list()
-        vals = data[indep].unique()
-        for val in vals:
-            g = data.loc[data[indep] == val]
-            g = g.loc[:, [dep]].squeeze().tolist()
-            groups.append(g)
-
-        Kruskal = stats.kruskal(*groups)
-        oneWayANOVA.write('Results for the Kruskal-Wallis Test -- to be used if ANOVA assumptions are violated: \n\n')
-        oneWayANOVA.write('statistic: ' + str(Kruskal[0]) + '/ p-value is: ' + str(Kruskal[1]) + '\n')
-        oneWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
-        results['Kruskal-Wallis_Results'] = Kruskal
-
+        # Post hoc test (Tukey's HSD) to compare group means
+        f.write("\nTukey's HSD Post Hoc Test:")
+        tukey_result = sm.stats.multicomp.pairwise_tukeyhsd(data[target], data[indep])
+        f.write(str(tukey_result))
         
-        #The dunn's test -- follow up
-        if (Kruskal[1] > alpha) and (not followUp):
-            oneWayANOVA.write('The p-value is higher than alpha; hence, no follow-up test was conducted for Kruskal test\n')    
-        else:
-            oneWayANOVA.write("Results for follow-up Dunn's test between " + indep + " and " + dep + " are: \n\n")
-            if len(data[indep].value_counts()) <= 2:
-                oneWayANOVA.write('Only two groups. No follow up test was conducted\n')
-            else:
-                FSA = importr('FSA')
-                dunnTest, formulaMaker, names = r['dunnTest'], r['as.formula'], r['names']
-                with localconverter(ro.default_converter + pandas2ri.converter):
-                    rDf = ro.conversion.py2rpy(data)
-
-                formula = formulaMaker(dep + ' ~ ' + indep)
-                dunnTwoWay = dunnTest(formula, data=rDf, method="bonferroni")
-
-                asData, doCall, rbind = r['as.data.frame'], r['do.call'], r['rbind']
-                dunnTwoWay = asData(doCall(rbind, dunnTwoWay))
-
-                with localconverter(ro.default_converter + pandas2ri.converter):
-                    dunnTwoWay = ro.conversion.rpy2py(dunnTwoWay)
-
-                dunnTwoWay.drop(['method', 'dtres'], inplace = True)
-
-                for col in ['Z', 'P.unadj', 'P.adj']:
-                    dunnTwoWay[col] = pd.to_numeric(dunnTwoWay[col])
-                    dunnTwoWay[col] = np.round(dunnTwoWay[col], decimals = 5)
-                
-                dunnSummary = dunnTwoWay.to_string(header=True, index=False)
-                oneWayANOVA.write(dunnSummary + '\n\n')
+        # Kruskal-Wallis assumptions
+        # 1. Independence - Assumed to be met as each observation is independent.
+        # 2. Ordinal Data - The dependent variable should be measured on an ordinal scale or higher.
         
-        oneWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
-        oneWayANOVA.close()
-
-        self.oneANOVA = results
-        return results
-    
-    def __two_way_ANOVA(self, data, dep, indep, alpha, between, followUp, OGdata):
-        results = dict()
-        if len(data[indep[0]].value_counts()) < len(data[indep[1]].value_counts()):
-            temp = indep.pop(0)
-            indep.append(temp)
-        elif len(data[indep[0]].value_counts()) == len(data[indep[1]].value_counts()):
-            temp1 = indep.pop(0)
-            temp2 = indep.pop(0)
-            if len(temp1) <= len(temp2):
-                indep.append(temp2); indep.append(temp1)
-            else:
-                indep.append(temp1); indep.append(temp2)
+        # Check assumptions
+        # As Kruskal-Wallis is a non-parametric test, it does not assume normality or homogeneity of variance.
         
-        print(indep)
-        new_indep=relabel(indep[0])
-        data=data.rename(columns={indep[0]:new_indep},inplace=False)
-        OGdata=OGdata.rename(columns={indep[0][:indep[0].find('_')]:relabel(indep[0][:indep[0].find('_')]),indep[0][indep[0].find('_')+1:indep[0].rfind('_')]:relabel(indep[0][indep[0].find('_')+1:indep[0].rfind('_')])},inplace=False)
-        indep=[new_indep,indep[1]]
-        print(indep)
+        # Perform Kruskal-Wallis test
+        f.write("\nKruskal-Wallis Test:")
+        kruskal_result = stats.kruskal(*[group_data[target].values for _, group_data in data.groupby(indep)])
+        f.write(f"p-value = {kruskal_result.pvalue:.4f}")
+        
+        # Post hoc test (Dunn's test) to compare group medians
+        f.write("\nDunn's Test Post Hoc Test:\n")
+        dunn_result = sp.posthoc_dunn(data, val_col = target, group_col = indep)
+        f.write(str(dunn_result))
 
-        two_way_anova_folder = os.path.join(self.out_folder, 'two_way_ANOVA')
-        if not os.path.exists(two_way_anova_folder):
-            os.makedirs(two_way_anova_folder)
-        result_name = indep[0] + '_' + indep[1]
-        result_folder = os.path.join(two_way_anova_folder, result_name)
+    def two_way_anova(
+        self,
+        indep_1,
+        indep_2 = 'Sex',
+        out_file = None
+    ):
+        if out_file is None:
+            out_file = '{}_{}_one_way_anova.txt'.format(indep_1, indep_2)
+
+        result_folder = os.path.join(self.out_folder, 'two_way_way_anova')
         if not os.path.exists(result_folder):
             os.makedirs(result_folder)
 
-        formula = dep + ' ~ C(' + indep[0] + ') + C(' + indep[1] + ') + C(' + indep[0] + '):C(' + indep[1] + ')'
-        twoWayANOVA = open(os.path.join(result_folder, 'twoWayANOVA_summary.txt'), 'w')
-        twoWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
-            
-        #Create a box plot
-        data = data[indep + [dep]]
-        colors = ['#808080', '#FFFFFF', '#C0C0C0']
-        box = sns.boxplot(x=indep[0], y=dep, hue=indep[1], data=data, palette = colors, width = 0.6)
-        fig = box.get_figure()
-        fig.savefig(os.path.join(result_folder, "twoWayANOVA_boxPlot.png"))
-        plt.close()
+        data = self.cont_ohc.copy(deep = True)
+        target = self.cont_outcome
 
-        #Create a bar plot
-        sns.set(rc = {'figure.figsize':(15,10)})
-        sns.set(font_scale = 1.5)
-        sns.set_style('whitegrid')
+        f = open(os.path.join(result_folder, out_file), "w+")
 
-        if data[indep[0]].isin(['other']).any():
-            for i in range(len(data)):
-                if data[indep[0]].iat[i]!='other':
-                    data[indep[0]].iat[i]=indep[0][indep[0].rfind('_')+1:]
-
-        if 'sex' in indep:
-            data['sex']=data['sex'].astype(str)
-            for i in range(len(data)):
-                if data[indep[1]].iat[i]=='0.0':
-                    data[indep[1]].iat[i]='female'
-                else:
-                    data[indep[1]].iat[i]='male'
+        # Two-way ANOVA assumptions
+        # 1. Independence - Assumed to be met as each observation is independent.
         
-        # figure out what this is
-        # self.plotComboBox(indep[0],dep,data,OGdata,currPath)
-        fig, bar = plt.subplots()
+        # Perform two-way ANOVA with Type 3
+        formula = '{} ~ C({}) + C({}) + C({}):C({})'.format(target, indep_1, indep_2, indep_1, indep_2)
+        model_anova = smf.ols(formula, data = data).fit()
+        anova_table = sm.stats.anova_lm(model_anova, typ=3)
         
-        colors = ['#808080', '#FFFFFF', '#C0C0C0']
-
-        sns.barplot(x=indep[0], ax = bar, y=dep, hue=indep[1], data=data, 
-        palette = colors, capsize=.1)
-        width = 0.3
-
-        num_var2 = len(data[indep[0]].unique())
-        hatches = itertools.cycle(['+', 'x', '-', '/', '//', '\\', '*', 'o', 'O', '.'])
-
-        '''
-        for i, patch in enumerate(bar.patches):
-            # Set a different hatch for each bar
-            if i % num_var2 == 0:
-                hatch = next(hatches)
-            patch.set_hatch(hatch)
-        '''
-
-        for patch in bar.patches:
-            current_width = patch.get_width()
-            diff = current_width - width
-            patch.set_width(width)
-            patch.set_x(patch.get_x() + diff * .5)
-            patch.set_edgecolor('#000000')
-
-        bar.legend(frameon = 1, title = indep[1], fontsize = 15, title_fontsize = 20,
-        bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0)     
-        fig = bar.get_figure()
-        fig.savefig(os.path.join(result_folder, "twoWayANOVA_barPlot.png"))
-        plt.close()
-            
-        #Conducting the ANOVA test
-        twoWayANOVA.write('Results for two way ANOVA between ' + indep[0] + '&' + indep[1] + ' and ' + dep + ' are: \n\n')
-        res = bioinfokit.analys.stat()
-        res.anova_stat(df=data, res_var=dep, anova_model=formula, ss_typ=3)
-        asummary = res.anova_summary.iloc[1:, :].to_string(header=True, index=True)
-        twoWayANOVA.write(asummary + '\n')
-        twoWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
-        results['ANOVA_Results'] = res.anova_summary
-
-        #Follow-up Test TukeyTest
-        if (all(x > alpha  for x in res.anova_summary.iloc[1:4, 4].tolist())) and (not followUp):
-            twoWayANOVA.write('All the p-values is higher than alpha; hence, no follow-up test was conducted\n\n')
-        else:
-            tukey = list()
-            message = list()
-            message.append('Main effect for ' + indep[0] + ':\n')
-            message.append('Main effect for ' + indep[1] + ':\n')
-            message.append('Interaction effect between ' + indep[0] + ' and ' + indep[1] + ':\n')                
-            twoWayANOVA.write('Results for follow-up Tukey test between ' + indep[0] + ' & ' + indep[1] + ' and ' + dep + ' are: \n\n')
-            followUp = bioinfokit.analys.stat()
-            if len(data[indep[0]].value_counts()) <= 2:
-                tukey.append('Only two groups. No follow up test was conducted\n')
-            else:
-                followUp.tukey_hsd(df=data, res_var=dep, xfac_var=indep[0], anova_model=formula)
-                tukey.append(followUp.tukey_summary.to_string(header=True, index=False))
-            
-            if len(data[indep[1]].value_counts()) <= 2:
-                tukey.append('Only two groups. No follow up test was conducted\n')
-            else:
-                followUp.tukey_hsd(df=data, res_var=dep, xfac_var=indep[1], anova_model=formula)
-                tukey.append(followUp.tukey_summary.to_string(header=True, index=False))
-
-            if len(data[indep[0]].value_counts())*len(data[indep[1]].value_counts()) <= 2:
-                tukey.append('Only two groups. No follow up test was conducted\n')
-            elif res.anova_summary.iloc[1:4, 4].tolist()[2] > alpha:
-                tukey.append('Interaction effect not significant. No follow up test was conducted\n')
-            else:
-                followUp.tukey_hsd(df=data, res_var=dep, xfac_var=indep, anova_model=formula)
-                tukey.append(followUp.tukey_summary.to_string(header=True, index=False))
-
-            for i in range(len(tukey)):
-                twoWayANOVA.write(message[i] + tukey[i] + '\n\n')
-                twoWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
-            results['Tukey_Results'] = tukey
-        twoWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
+        f.write("\nType 3 Two-Way ANOVA:\n")
+        f.write(anova_table.to_string())
+        
+        # Check normality assumption for the errors in ANOVA using residuals
+        residuals_anova = model_anova.resid
+        shapiro_test_p_value = stats.shapiro(residuals_anova)[1]
+        f.write("\nShapiro-Wilk Test for Normality (ANOVA Residuals):")
+        f.write("p-value = {}".format(str(shapiro_test_p_value)))
+        
+        # Check equality of variance using Levene's test
+        levene_p_value = stats.levene(*[group_data[target] for _, group_data in data.groupby([indep_2, indep_1])])[1]
+        f.write("\nLevene's Test for Homogeneity of Variance:")
+        f.write("p-value = {}".format(str(levene_p_value)))
                 
-        #histograms and QQ-plot
-        sm.qqplot(res.anova_std_residuals, line='45')
-        plt.xlabel("Theoretical Quantiles")
-        plt.ylabel("Standardized Residuals")
-        plt.savefig(os.path.join(result_folder, 'twoWayANOVA_qqPlot.png'))
-        plt.close()
-
-        plt.hist(res.anova_model_out.resid, bins='auto', histtype='bar', ec='k') 
-        plt.xlabel("Residuals")
-        plt.ylabel('Frequency')
-        plt.savefig(os.path.join(result_folder, 'twoWayANOVA_histogram.png'))
-        plt.close()
-                
-        #Shapiro-Wilk Test for Normality
-        w, pvalue = stats.shapiro(res.anova_model_out.resid)
-        twoWayANOVA.write('Results for Shapiro-Wilk test to check for normality are: \n\n')
-        twoWayANOVA.write('w is: ' + str(w) + '/ p-value is: ' + str(pvalue) + '\n')
-        twoWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
-        results['Shaprio-Wilk_Results'] = (w, pvalue)
-            
-        #Check for equality of varianve using Levene's test
-        twoWayANOVA.write("Results for Levene's test to check for equality of variance are: \n\n")
-        eqOfVar = bioinfokit.analys.stat()
-        eqOfVar.levene(df=data, res_var=dep, xfac_var=indep)
-        eqOfVarSummary = eqOfVar.levene_summary.to_string(header=True, index=False)
-        twoWayANOVA.write(eqOfVarSummary + '\n')
-        twoWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
-        results['Levene_Results'] = eqOfVar.levene_summary
-
-        #The scheirer Ray Hare test
-
-        rcompanion = importr('rcompanion')
-        formulaMaker = r['as.formula']
-        scheirerRayHare = r['scheirerRayHare']
-
-        formula = formulaMaker(dep + ' ~ '  + indep[0] + ' + ' + indep[1])
-        print(data.dtypes)
-        with localconverter(ro.default_converter + pandas2ri.converter):
-                rDf = ro.conversion.py2rpy(data)
-
-        scheirerANOVA = scheirerRayHare(formula, data = rDf)
-
-        with localconverter(ro.default_converter + pandas2ri.converter):
-            scheirerANOVA = ro.conversion.rpy2py(scheirerANOVA)
-
-        twoWayANOVA.write('Results for the scheirer Ray Hare Test -- to be used if ANOVA assumptions are violated: \n\n')
-        scheirerSummary = scheirerANOVA.to_string(header=True, index=True)
-        twoWayANOVA.write(scheirerSummary + '\n')
-        twoWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
-        results['scheirerRayHare'] = scheirerANOVA
+        outliers = self.__detect_outliers_tukey(data, group_col=[indep_2, indep_1], y_col = target, threshold = 1.5)
+        f.write("\n{} outliers detected:".format(len(data.loc[outliers])))
+        f.write(str(data.loc[outliers]['ID_1'].tolist()))
         
-        #The dunn's test -- follow up
-        if (all(x > alpha  for x in scheirerANOVA['p.value'].tolist())) and (not followUp):
-            twoWayANOVA.write('All the p-values is higher than alpha; hence, no follow-up test was conducted for ScheirerRayHare test\n\n')
-        
-        else:
-            FSA = importr('FSA')
-            dunnTest = r['dunnTest']
-            data['interaction'] = data[indep[0]].astype(str) + '_' + data[indep[1]].astype(str)
-            with localconverter(ro.default_converter + pandas2ri.converter):
-                rDf = ro.conversion.py2rpy(data)
-            indep.append('interaction')            
-            for var in indep:
-                formula = formulaMaker(dep + ' ~ ' + var)
-                dunnTwoWay = dunnTest(formula, data=rDf, method="bonferroni")
-
-                asData, doCall, rbind = r['as.data.frame'], r['do.call'], r['rbind']
-                dunnTwoWay = asData(doCall(rbind, dunnTwoWay))
-
-                with localconverter(ro.default_converter + pandas2ri.converter):
-                    dunnTwoWay = ro.conversion.rpy2py(dunnTwoWay)
-
-                dunnTwoWay.drop(['method', 'dtres'], inplace = True)
-                for col in ['Z', 'P.unadj', 'P.adj']:
-                    dunnTwoWay[col] = pd.to_numeric(dunnTwoWay[col])
-                    dunnTwoWay[col] = np.round(dunnTwoWay[col], decimals = 5)
-                if var == 'interaction':
-                    twoWayANOVA.write("Results for follow-up Dunn's test between " + indep[0] + ' & ' + indep[1] + " and " + dep + " are: \n\n")
-                else:
-                    twoWayANOVA.write("Results for follow-up Dunn's test between " + var + " and " + dep + " are: \n\n")
-                
-                if len(data[var].value_counts()) <= 2:
-                    twoWayANOVA.write('Only two groups. No follow up test was conducted\n')
-                elif var == 'interaction' and scheirerANOVA['p.value'].tolist()[2] > alpha:
-                    twoWayANOVA.write('Interaction effect not significant. No follow up test was conducted\n')
-                else:
-                    dunnSummary = dunnTwoWay.to_string(header=True, index=False)
-                    twoWayANOVA.write(dunnSummary + '\n\n')
-        
-                twoWayANOVA.write('----------------------------------------------------------------------------------------\n\n')
-
-        self.twoANOVA = results
-        return results
+        # Perform Tukey's test as a follow-up for ANOVA
+        f.write("\nTukey's Test as a Follow-up for ANOVA:")
+        mc = MultiComparison(data[target], data[indep_1])
+        result = mc.tukeyhsd()
+        f.write(str(result))
+    
+    def __detect_outliers_tukey(self, data, group_col, y_col, threshold=1.5):
+        outliers = []
+        for group, group_data in data.groupby(group_col):
+            q1 = group_data[y_col].quantile(0.25)
+            q3 = group_data[y_col].quantile(0.75)
+            iqr = q3 - q1
+            lower_bound = q1 - threshold * iqr
+            upper_bound = q3 + threshold * iqr
+            outliers_group = group_data[(group_data[y_col] < lower_bound) | (group_data[y_col] > upper_bound)]
+            outliers.extend(outliers_group.index.tolist())
+        return outliers
 
     def mediation_analysis(
         self,
         dep,
         med,
         indep,
-        continuous,
-        sims = 1000
+        continuous
     ):
         '''
         Conducts mediation analysis on continous, OHC data for given dependent variable, mediator, and independent variable(s).
@@ -573,7 +229,7 @@ class Stat_Analyzer():
             continuous -- list of continuous variables
             sims -- i don't even know
         '''
-        data = self.nonbinOHCdata.copy(deep = True)
+        data = self.cont_ohc.copy(deep = True)
         data.columns = data.columns.str.replace(' ', '_')
         data.columns = data.columns.str.replace('.', '_')
 
@@ -595,46 +251,28 @@ class Stat_Analyzer():
             current_var_file = str(var) + '-' + str(med) + '-' + str(dep) + '.txt'
             result_file = os.path.join(result_folder, current_var_file)
 
-            # l1 = importr('mediation')
-            # formulaMake = r['as.formula']
-            # mediate, lm, glm, summary, capture = r['mediate'], r['lm'], r['glm'], r['summary'], r['capture.output']
-
-            # MediationFormula = formulaMake(mediator + ' ~ ' + var)
-            # OutcomeFormula = formulaMake(dep + ' ~ ' + var + ' + ' + mediator)
             mediation_formula = med + ' ~ ' + var
             outcome_formula = dep + ' ~ ' + var + ' + ' + med
             print('Med formula = {}'.format(mediation_formula))
             print('Dep formula = {}'.format(outcome_formula))
-
-            # with localconverter(ro.default_converter + pandas2ri.converter):
-            #     data = ro.conversion.py2rpy(data)
-
+            
             probit = links.probit
             if med in continuous:
-                # modelM = lm(MediationFormula, data)
                 model_m = sm.OLS.from_formula(mediation_formula, data)
-            else:
-                # modelM = glm(MediationFormula, data = data, family = "binomial")           
+            else:          
                 model_m = sm.GLM.from_formula(mediation_formula, data, family=sm.families.Binomial(link=probit()))
             
             if dep in continuous:
-                # modelY = lm(OutcomeFormula, data)
                 model_y = sm.OLS.from_formula(outcome_formula, data)
             else:
-                # modelY = glm(OutcomeFormula, data = data, family = "binomial")
                 model_y = sm.GLM.from_formula(outcome_formula, data, family=sm.families.Binomial(link=probit()))
-            
-            # results = mediate(modelM, modelY, treat=var, mediator=mediator,sims=sims)
-            # dfR = summary(results)
-            # self.mediation['results'] = dfR
-            # capture(dfR, file = result_file)
+                
             med = Mediation(model_y, model_m, var, med).fit()
             print(med.summary())
 
     # ARL below was written mostly by chatgpt, so we may have to check for errors. doesn't use R. refer to cole's code for the old version
     def association_rule_learning(
         self, 
-        target,
         continuous=[],
         min_support=0.00045, 
         min_confidence=0.02, 
@@ -661,7 +299,8 @@ class Stat_Analyzer():
             drop_pairs -- if True, columns containing 'pair:' will be dropped
             out_file -- name of output .txt file (no extension required)
         '''
-        data = self.binOHCdata_withBase.copy(deep=True)
+        data = self.bin_ohc_wbase.copy(deep=True)
+        target = self.bin_outcome
         data.drop(columns = data.filter(regex = '^pair:').columns, inplace = True)
         print(data.shape)
 
@@ -678,7 +317,7 @@ class Stat_Analyzer():
             os.makedirs(result_folder)
             
         if protective:
-            data[target] = np.absolute(np.array(data[target].values) - 1)
+            data[target] = ~data[target]
 
         # Generate association rules using mlxtend
         if protective:
@@ -705,25 +344,27 @@ class Stat_Analyzer():
 
         rules.to_csv(os.path.join(self.out_folder, 'association_rule_learning', 'arl_results{}.csv'.format('_protective' if protective else '')))
     
-    def multivariate_linear_regression(self, target, out_file = 'mvlin.csv'):
+    def multivariate_linear_regression(self, out_file = 'mvlin.csv'):
         '''
         Runs multivariate regression on continuous, OHC data for given target variable.
         Saves results as a .csv file with given name
         '''
-        y_train = self.nonbinOHCdata[target]
-        x_train_sm = sm.add_constant(self.nonbinOHCdata.drop(columns = [target, 'ID_1']))
+        target = self.cont_outcome
+        y_train = self.cont_ohc[target]
+        x_train_sm = sm.add_constant(self.cont_ohc.drop(columns = [target, 'ID_1']))
 
         logm2 = sm.GLM(y_train, x_train_sm, family=sm.families.Gaussian())
         res = logm2.fit()
         self.display_regression_results(x_train_sm.columns, res, out_file)
     
-    def multivariate_logistic_regression(self, target, out_file = 'mvlog.csv'):
+    def multivariate_logistic_regression(self, out_file = 'mvlog.csv'):
         '''
         Runs multivariate regression on binarized, OHC data for given target variable.
         Saves results as a .csv file with given name
         '''
-        y = self.binOHCdata[target]
-        X = self.binOHCdata.drop(columns = ['ID_1'])
+        target = self.bin_outcome
+        y = self.bin_ohc[target]
+        X = self.bin_ohc.drop(columns = ['ID_1'])
 
         res=sm.GLM(y, X.loc[:, X.columns != 'PHQ9_binary'], family = sm.families.Binomial(link = sm.families.links.logit())).fit()
 
@@ -778,48 +419,7 @@ class Stat_Analyzer():
     
 # Testing the code, doesn't work rn, have to update
 def main():
-
-    # getting and formatting a test file for log regression
-    data = pd.read_csv("/home/mminbay/summer_research/summer23_aylab/data/dom_overall/analysis_data.csv", index_col = 0).dropna().drop(columns = ['Age', 'Sex'])
-    bin_nonOHC = data.drop(columns = ['PHQ9'])
-    cont_nonOHC = data.drop(columns = ['PHQ9_binary'])
-    bin_OHC_dropbase = pd.get_dummies(bin_nonOHC, columns = ['Sleeplessness/Insomnia', 'Chronotype'], drop_first = True)
-    bin_OHC_withbase = pd.get_dummies(bin_nonOHC, columns = ['Sleeplessness/Insomnia', 'Chronotype'], drop_first = False)
-    cont_OHC = pd.get_dummies(cont_nonOHC, columns = ['Sleeplessness/Insomnia', 'Chronotype'])
-
-    out_folder = '/home/mminbay/summer_research/summer23_aylab/data/dom_overall/analysis/'
-    r_path = '/home/mminbay/summer_research/summer23_aylab/Rscripts'
-
-    # Create an instance of Stat_Analyzer
-    analyzer = Stat_Analyzer(
-        bin_OHC_dropbase,  
-        bin_OHC_withbase,
-        cont_OHC,
-        bin_nonOHC, 
-        cont_nonOHC, 
-        r_path, 
-        out_folder
-    )
-
-    # Run multivariate logistic regression
-    # target_variable = 'PHQ9_binary'
-    # output_file = 'test_log_reg.csv'
-    # analyzer.multivariate_logistic_regression(target_variable, output_file)
-
-    # Run multivariate linear regression
-    # target_variable = 'PHQ9'
-    # output_file = "test_lin_reg.csv"
-    # analyzer.multivariate_linear_regression(target_variable, output_file)
-
-    # Run association rule learning. We need the baseline for OHC as well, which is why ARL uses the df where we do not drop the baselines: binOHCdata_withBase
-    # not working because we do not have arulesViz package...
-    # target_variable = "PHQ9_binary"
-    # output_file = "test_ARL"
-    # rules = analyzer.association_rule_learning(target_variable, out_file=output_file, continuous = ['TSDI'], protective = True)
-
-    analyzer.mediation_analysis('PHQ9', 'Chronotype_1.0', 'rs540730450', ['TSDI', 'PHQ9'])
-    
-    # mediation also needs R...
+    pass
     
 # Execute the main function
 if __name__ == "__main__":
