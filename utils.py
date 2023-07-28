@@ -4,8 +4,100 @@ import os
 from sklearn.model_selection import train_test_split
 import multiprocessing as mp
 from multiprocessing import pool
+import subprocess
 
-def compile_fs_results(dir, identifier = None, output_name = 'compiled.csv'):
+import pandas as pd
+
+def find_sig_snp_interactions(csv_file, output_file=None):
+    """
+    Find significant positions in a symmetric matrix CSV file.
+
+    Given a CSV file containing a symmetric matrix, this function identifies all positions
+    (row-name, column-name) in the upper triangular part (excluding the diagonal) where the
+    values are less than 0.05. This is made to work well with the csv output of snpassoc since 
+    upper triangular of that output file has epistatic snp-snp interactions needed for
+    network analysis.
+
+    Parameters:
+        csv_file (str): The file path of the CSV file containing the symmetric matrix.
+        output_file (str, optional): The file path where the DataFrame will be saved as CSV.
+
+    Returns:
+        pandas DataFrame: A two-column DataFrame, where each row has two SNPs with an edge.
+        Structure is fit to be used in network analysis.
+
+    Example:
+        csv_file_path = 'path/to/your/csv_file.csv'
+        result = find_sig_snp_interactions(csv_file_path)
+        print(result)
+
+        # Optionally, save the DataFrame to a CSV file
+        output_csv_path = 'path/to/output.csv'
+        find_sig_snp_interactions(csv_file_path, output_file=output_csv_path)
+    """
+    # Rest of the function implementation remains the same
+    df = pd.read_csv(csv_file, index_col=0)
+    significant_positions = set()
+    for i in range(len(df)):
+        for j in range(i + 1, len(df)):
+            value = df.iloc[i, j]
+            if value < 0.05:
+                significant_positions.add((df.index[i], df.columns[j]))
+
+    result_df = pd.DataFrame(list(significant_positions), columns=['SNP1', 'SNP2'])
+
+    if output_file:
+        result_df.to_csv(output_file, index=False)
+
+    return result_df
+
+def snpassoc_wrapper(script_path, data_path, outcome):
+    # Construct the command to run the R script with arguments
+    command = ["Rscript", script_path, data_path, outcome]
+    
+    # Execute the R script through the command line
+    process = subprocess.run(command, capture_output=True, text=True)
+    
+    # Check the return code and print the output and errors (if any)
+    if process.returncode == 0:
+        print("R script executed successfully.")
+        print("Output:")
+        print(process.stdout)
+    else:
+        print("Error occurred while running the R script.")
+        print("Errors:")
+        print(process.stderr)
+
+def reorder_cols(data, cols = ['ID_1', 'PHQ9', 'PHQ9_binary']):
+    '''
+    Return a view of a dataframe where the provided columns are at the end. 
+    '''
+    new_cols_order = [col for col in data.columns if col not in cols] + cols
+    return data[new_cols_order]
+
+def merge_for_fs(snp_data, depression_path, sex = None, outcome = 'bin'):
+    '''
+    Create a dataframe that is ready for feature selection. This dataframe will be filtered for sex if required,
+    and will only have SNP columns, ID_1, and PHQ9_binary or PHQ9 as columns
+
+    Arguments:
+        snp_data (DataFrame) -- dataframe containing SNP information and ID_1. there should be no other columns
+    '''
+    depression_data = pd.read_csv(depression_path, index_col = 0)
+    final = snp_data.merge(depression_data, on = 'ID_1')
+    if sex == 'male':
+        final = final[final['Sex'] == 1]
+    elif sex == 'female':
+        final = final[final['Sex'] == 0]
+    if outcome == 'cont':
+        final.drop(columns = ['PHQ9_binary'], inplace = True)
+    elif outcome == 'bin':        
+        final.drop(columns = ['PHQ9'], inplace = True)
+    else:
+        raise Exception('\'outcome\' parameter must be \'bin\' or \'cont\'')
+    return final
+
+def compile_fs_results(dir, identifier = None, out_name = 'compiled.csv'):
     '''
     Compile feature selection results from different folders in a directory. This function assumes that you have created multiple FeatureSelector object for feature selection, which created their separate directories in a common directory. It is also assumed that no folder in this directory is shared by two FS objects, as in, a single folder will only contain a single summary .csv file and a single bootstraps .csv file, and all the summary files have the same columns with no duplicates. Outputs the results at the given directory with the provided output name
 
@@ -72,7 +164,7 @@ def compile_snps(snps, factors, dir, out):
     final = pd.concat(results, axis = 1)
     final = final.loc[:,~final.columns.duplicated()].copy()
 
-    final.to_csv(os.path.join(out))
+    final.to_csv(out)
         
 def compile_wrapper(args):
     '''

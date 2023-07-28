@@ -223,13 +223,21 @@ class Stat_Analyzer():
         Saves results as a .csv file
 
         Arguments:
-            dep -- dependent variable, or outcome label of your study
+            dep ('bin', 'cont') -- whether 
             med -- mediator variable
             indep -- independent variable, or list of independent variables
             continuous -- list of continuous variables
             sims -- i don't even know
         '''
-        data = self.cont_ohc.copy(deep = True)
+        if dep == 'bin':
+            dep = self.bin_outcome
+            data = self.bin_ohc.copy(deep = True)
+        elif dep == 'cont':
+            dep = self.cont_outcome
+            data = self.cont_ohc.copy(deep = True)
+        else:
+            raise Exception('Argument \'dep\' for mediation analysis must be either \'bin\' or \'cont\'')
+
         data.columns = data.columns.str.replace(' ', '_')
         data.columns = data.columns.str.replace('.', '_')
 
@@ -250,6 +258,7 @@ class Stat_Analyzer():
             var = indep[i].replace('.', '_').replace(' ', '_')
             current_var_file = str(var) + '-' + str(med) + '-' + str(dep) + '.txt'
             result_file = os.path.join(result_folder, current_var_file)
+            f = open(result_file, 'w+')
 
             mediation_formula = med + ' ~ ' + var
             outcome_formula = dep + ' ~ ' + var + ' + ' + med
@@ -262,12 +271,14 @@ class Stat_Analyzer():
             else:          
                 model_m = sm.GLM.from_formula(mediation_formula, data, family=sm.families.Binomial(link=probit()))
             
-            if dep in continuous:
+            if dep == self.cont_outcome:
                 model_y = sm.OLS.from_formula(outcome_formula, data)
             else:
                 model_y = sm.GLM.from_formula(outcome_formula, data, family=sm.families.Binomial(link=probit()))
                 
             med = Mediation(model_y, model_m, var, med).fit()
+            f.write(str(med.summary()))
+            f.close()
             print(med.summary())
 
     # ARL below was written mostly by chatgpt, so we may have to check for errors. doesn't use R. refer to cole's code for the old version

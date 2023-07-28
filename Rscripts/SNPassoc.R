@@ -5,15 +5,49 @@
 library("SNPassoc")
 library("dplyr")
 
-
 ###########################################
 #1 pre processing
-#########
+###########################################
+
+create_snpassoc_paths <- function(csv_path, analysis_type) {
+  # Extract the file name, file extension, and parent directory
+  file_name <- basename(csv_path)
+  parent_dir <- dirname(csv_path)
+  extension <- tools::file_ext(csv_path)
+
+  # Determine the file name suffix based on the analysis type
+  if (analysis_type == "PHQ9") {
+    suffix <- "cont_snpassoc"
+  } else if (analysis_type == "PHQ9_binary") {
+    suffix <- "bin_snpassoc"
+  } else {
+    stop("Invalid analysis_type. Please use 'PHQ9' or 'PHQ9_binary'.")
+  }
+
+  # Create the new file names
+  csv_new_name <- paste0(file_name, "_", suffix, ".csv")
+  png_new_name <- paste0(file_name, "_", suffix, ".png")
+
+  # Create the new paths with parent directory
+  csv_new_path <- file.path(parent_dir, csv_new_name)
+  png_new_path <- file.path(parent_dir, png_new_name)
+
+  return(list(csv_new_path, png_new_path))
+}
 
 # reading the data file with all the important SNPs, as well as the covariating clinical factors of importance # nolint
 
+if (length(commandArgs(trailingOnly = TRUE)) != 2) {
+  stop("Please provide three command line arguments: Input path, and outcome variable")
+}
+
+snpdata_path <- commandArgs(trailingOnly = TRUE)[1]
+target <- commandArgs(trailingOnly = TRUE)[2]
+
+output_paths_list <- create_snpassoc_paths(snpdata_path, target)
+
 # Read the CSV file, replace path with your file path
-snpdata <- read.csv("data/analysis_data.csv")
+snpdata <- read.csv(snpdata_path)
 
 # Select column names starting with "rs". this selects all the SNP columns that start with rs # nolint
 
@@ -46,9 +80,6 @@ print(column_range)
 # change clinical factors and target as you want. these are the columnn names
 clinical <- c("Chronotype_2.0", "Chronotype_3.0", "Chronotype_4.0", "Sleeplessness.Insomnia_2.0", "Sleeplessness.Insomnia_3.0", "Overall_Health_Score_2.0", "Overall_Health_Score_3.0", "Overall_Health_Score_4.0", "TSDI_n")
 
-# change target to just "PHQ9" for continuous, or whatever your target column name is
-target <- "PHQ9_binary"
-
 snpcols <- colnames(snpdata)[min(snp_column_numbers):max(snp_column_numbers)]
 
 # following snippet changes 0 to AA, 1 to AB
@@ -71,15 +102,15 @@ data.snp <- setupSNP(data = snpdata %>%
 # the interactionPval function. Change the target here too (PHQ9 OR PHQ9_binary, or whatever you have)
 # if you want to add clinical factors, change the line as: result.snp <- interactionPval(as.formula(paste("PHQ9_binary~", paste(clinical, collapse="+"))), # nolint
 # if you want to remove clinical factors, the same line becomes: result.snp <- interactionPval(as.formula(paste("PHQ9_binary~1")), # nolint
-result.snp <- interactionPval(as.formula(paste("PHQ9~1")), # nolint
+result.snp <- interactionPval(as.formula(paste(target, "~1")), # nolint
                              data.snp, model = "do")
 
 #################################
 #3 outputting the results to a csv
 #################
 # change the file path to save the result files there
-write.csv(result.snp, file = "data/snp-snp_interaction.csv", row.names = TRUE) # nolint
-png("data/snp-snp_interaction.png", width = 8, height = 6, units = "in", res = 300)  # Adjust the resolution as needed # nolint
+write.csv(result.snp, file = output_paths_list[[1]], row.names = TRUE) # nolint
+png(output_paths_list[[2]], width = 8, height = 6, units = "in", res = 300)  # Adjust the resolution as needed # nolint
 par(mar = c(4, 4, 2, 1))  # Adjust the margin values as needed
 plot(result.snp)
 dev.off()
