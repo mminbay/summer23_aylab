@@ -20,6 +20,7 @@ from xgboost import XGBClassifier
 from skopt.space import Real, Integer, Categorical
 import multiprocessing as mp
 from sklearn.exceptions import ConvergenceWarning
+from sklearn.metrics import make_scorer, fbeta_score
 from sklearn.utils._testing import ignore_warnings
 from imblearn.combine import SMOTETomek
 from sklearn.ensemble import StackingClassifier
@@ -233,6 +234,7 @@ class ClassifierHelper():
         sampling_strategy = None,
         n_test_resamples = 1,
         test_resample_size = 1.0,
+        fbeta = None
     ):
         '''
         Wrapper for running k-fold cross validation.
@@ -247,21 +249,25 @@ class ClassifierHelper():
             undersample (bool) -- if True, will balance training data during k-fold cross validation by undersampling
             sampling_strategy (float) -- if oversampling or undersampling, will balance data so that target minority class matches this ratio
             n_test_resamples (int) -- test the model after cross validation this many times with random samples from the test split.
-            test_resample_size (float) -- -- randomly samples (with replacements) this fraction from the test data instead of using it entirely during testing.
+            test_resample_size (float) -- randomly samples (without replacements) this fraction from the test data instead of using it entirely during testing.
+            fbeta (float) -- if not None, hyperparameter tuning will be performed to optimize F-beta score with this beta value instead of accuracy.
             
         '''
 
+        # sanity checks for parameters
         if oversample and undersample:
             raise Exception('Cannot oversample and undersample at the same time.')
 
         if (oversample or undersample) and sampling_strategy == None:
             raise Exception('Missing ratio for data balancing.')
-            
+
+        # prepare feature matrix and outcome vector
         X_train = self.train_data.drop(columns = ['ID_1', target_column]).to_numpy()
         y_train = self.train_data[target_column].to_numpy()
 
         logging.info('Attempting classification for {} with {}: {} runs of {}-fold cross-validation.'.format(target_column, classifier, n_runs, n_folds))
-        
+
+        # folders to output results in. create them if non-existent
         c_path = os.path.join(self.out_folder, 'results', 'classifiers')
         r_path = os.path.join(self.out_folder, 'results', 'hyperparams_runs')
 
@@ -275,31 +281,54 @@ class ClassifierHelper():
         open(train_validation_path, 'w').close()
         open(train_test_path, 'w').close()
 
+        # use fbeta scoring if a beta value is provided
+        scorer = None
+        if fbeta is not None:
+            scorer = make_scorer(fbeta_score, beta = fbeta)
+
         for i in range(n_runs):
             result_path = os.path.join(r_path, classifier + "_" + method + '_run_' + str(i + 1) + ".txt")
             open(result_path, "w").close() 
             logging.info('Run {}:'.format(str(i)))
-            
+
+            # create classifier
             myclassif = MyClassifier(estimator = classifier, method = method, splits = n_folds, path = self.out_folder, run = i + 1)
+
+            # if a balancing method was provided, create an according balancer
             balancer = None
             if undersample:
                 balancer = RandomUnderSampler(sampling_strategy = sampling_strategy, random_state = 42 + i)     
             elif oversample:
                 balancer = SMOTE(sampling_strategy = sampling_strategy, random_state = 42 + i)
 
+            # if a balancer was created, create the cross-validation pipeline with it
             if balancer is None:
                 _pipeline = make_pipeline(myclassif)
             else:
                 _pipeline = make_pipeline(balancer, myclassif)
             cv = StratifiedKFold(n_splits=n_folds, random_state=i+40, shuffle= True)
 
+            # get hyperparameter search spaces
             parms, itr = ClassifierHelper.getParameters(classifier)
             parms = {'myclassifier__' + key: parms[key] for key in parms}
 
-            grid_imba = BayesSearchCV(_pipeline, search_spaces=parms, cv=cv, n_iter=itr, refit = False, n_jobs=-1, n_points=3)
+            # hyperparameter tuning
+            grid_imba = BayesSearchCV(
+                _pipeline, 
+                search_spaces = parms, 
+                cv = cv, 
+                n_iter = itr, 
+                refit = False, 
+                n_jobs = -1, 
+                n_points = 3,
+                scoring = scorer
+            )
             grid_imba.fit(X_train, y_train)
+
+            # get best params
             best = grid_imba.best_params_
 
+            # write best params
             bestParam = dict()
             for key in best.keys():
                 bestParam[key.split('__')[1]] = best[key]
@@ -328,7 +357,7 @@ class ClassifierHelper():
             trainVal.write(str(confMatrix).replace(' [', '').replace('[', '').replace(']', '') + '\n\n')
             trainVal.close()
 
-            
+            # create the same classifier with the best parameters from bayes search cv
             if classifier == 'rdforest':
                 Tester = RandomForestClassifier(**bestParam)
             elif classifier == 'logreg':
@@ -348,8 +377,10 @@ class ClassifierHelper():
             elif classifier == 'mfnn':
                 Tester = MLPClassifier(**bestParam)
 
+            # train classifier on entire training set
             Tester.fit(X_train, y_train)
 
+            # test classifier for provided times with provided resampling
             for j in range(n_test_resamples):
                 size = len(self.test_data) * test_resample_size
                 test_data = resample(
@@ -364,6 +395,7 @@ class ClassifierHelper():
                 
                 yp = Tester.predict(X_test)
 
+                # output results
                 trainTest = open(train_test_path, "a")
                 confMatrix = confusion_matrix(y_test,yp)
                 trainTest.write('Run {}, test sample {}:'.format(str(i), str(j)))
