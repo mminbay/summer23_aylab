@@ -394,11 +394,13 @@ class ClassifierHelper():
                 y_test = test_data[target_column].to_numpy()
                 
                 yp = Tester.predict(X_test)
+                fbeta_result = fbeta_score(y_test, yp, beta = fbeta)
 
                 # output results
                 trainTest = open(train_test_path, "a")
                 confMatrix = confusion_matrix(y_test,yp)
                 trainTest.write('Run {}, test sample {}:'.format(str(i), str(j)))
+                trainTest.write('F-beta score: {:.4f}\n'.format(fbeta_result))
                 trainTest.write(str(grid_imba.best_params_)+'\n')
                 trainTest.write(str(confMatrix).replace(' [', '').replace('[', '').replace(']', '') + '\n\n')
                 trainTest.close()
