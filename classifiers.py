@@ -6,9 +6,9 @@ from sklearn.model_selection import KFold, GridSearchCV, StratifiedKFold
 from imblearn import FunctionSampler
 from sklearn.base import BaseEstimator, TransformerMixin, ClassifierMixin
 from sklearn.ensemble import RandomForestClassifier
-from imblearn.over_sampling import SMOTE
+from imblearn.over_sampling import SMOTE, SMOTEN, SMOTENC
 from imblearn.under_sampling import RandomUnderSampler
-from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, make_scorer, balanced_accuracy_score
+from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, make_scorer, balanced_accuracy_score, fbeta_score
 from skopt import BayesSearchCV
 from sklearn.linear_model import  SGDClassifier, LogisticRegression
 from sklearn.naive_bayes import BernoulliNB
@@ -20,7 +20,6 @@ from xgboost import XGBClassifier
 from skopt.space import Real, Integer, Categorical
 import multiprocessing as mp
 from sklearn.exceptions import ConvergenceWarning
-from sklearn.metrics import make_scorer, fbeta_score
 from sklearn.utils._testing import ignore_warnings
 from imblearn.combine import SMOTETomek
 from sklearn.ensemble import StackingClassifier
@@ -46,7 +45,7 @@ class MyClassifier(BaseEstimator, ClassifierMixin):
         kernel = 'linear', C = 1, gamma = 0.1, degree = 3, eta = 0.05, scale_pos_weight = 1,
         min_samples_split = 2, min_samples_leaf = 1, l1_ratio = 0.15, leaf_size = 30,
         subsample = 3, colsample_bytree = 5, min_child_weight = 3, class_weight = 0.5,
-        hidden_layer_sizes = (64, 32, 16, 8)
+        hidden_layer_sizes = (64, 32, 16, 8), fbeta = None
     ):
 
         self.idx, self.method, self.estimator, self.splits = 0, method, estimator, splits
@@ -61,6 +60,7 @@ class MyClassifier(BaseEstimator, ClassifierMixin):
         self.subsample, self.colsample_bytree = subsample, colsample_bytree,
         self.run = run
         self.hidden_layer_sizes = hidden_layer_sizes
+        self.fbeta = fbeta
 
 
         if self.estimator == 'rdforest':
@@ -136,10 +136,13 @@ class MyClassifier(BaseEstimator, ClassifierMixin):
     def predict(self, X, y=None):
         return self.classify.predict(X)
 
-    def score(self, X, y, sample_weight=None):
+    def score(self, X, y, sample_weight = None):
         yp = self.predict(X)
-        f1 = f1_score(y, yp, sample_weight=sample_weight, zero_division=0)
-        acc = accuracy_score(y, yp, sample_weight=sample_weight)
+        if self.fbeta == None:
+            result = f1_score(y, yp, sample_weight = sample_weight, zero_division = 0)
+        else:
+            result = fbeta_score(y, yp, sample_weight = sample_weight, beta = self.fbeta)
+        acc = accuracy_score(y, yp, sample_weight = sample_weight)
         balanced = balanced_accuracy_score(y, yp)
         conf = confusion_matrix(y, yp)
 
@@ -151,7 +154,7 @@ class MyClassifier(BaseEstimator, ClassifierMixin):
         file.write(str(tempList)+':'+str(conf[0][0])+' '+str(conf[0][1])+' '+str(conf[1][0])+' '+str(conf[1][1])+'\n')
         file.close()
 
-        return f1
+        return result
 
     def makeTuple(self):
         tempList = list()
@@ -228,9 +231,8 @@ class ClassifierHelper():
         n_runs,
         n_folds, 
         classifier, 
-        method = 'default', 
-        oversample = False, 
-        undersample = False, 
+        method = 'default',
+        balancing_method = None,
         sampling_strategy = None,
         n_test_resamples = 1,
         test_resample_size = 1.0,
@@ -245,8 +247,7 @@ class ClassifierHelper():
             n_folds (int) -- number of cross validations in each run (k in k-fold cross validation).
             classifier (str) -- string identifier of the classifier to be used.
             method (str) -- i don't know what this is, but the code might break without it.
-            oversample (bool) -- if True, will balance training data during k-fold cross validation using SMOTE. 
-            undersample (bool) -- if True, will balance training data during k-fold cross validation by undersampling
+            balancing_method ('undersample', 'smote', 'smoten', 'smotenc') -- if provided, will balance training data during k-fold cross validation using provided method. 
             sampling_strategy (float) -- if oversampling or undersampling, will balance data so that target minority class matches this ratio
             n_test_resamples (int) -- test the model after cross validation this many times with random samples from the test split.
             test_resample_size (float) -- randomly samples (without replacements) this fraction from the test data instead of using it entirely during testing.
@@ -255,10 +256,7 @@ class ClassifierHelper():
         '''
 
         # sanity checks for parameters
-        if oversample and undersample:
-            raise Exception('Cannot oversample and undersample at the same time.')
-
-        if (oversample or undersample) and sampling_strategy == None:
+        if (balancing_method is not None) and sampling_strategy is None:
             raise Exception('Missing ratio for data balancing.')
 
         # prepare feature matrix and outcome vector
@@ -281,26 +279,41 @@ class ClassifierHelper():
         open(train_validation_path, 'w').close()
         open(train_test_path, 'w').close()
 
-        # use fbeta scoring if a beta value is provided
-        scorer = None
-        if fbeta is not None:
-            scorer = make_scorer(fbeta_score, beta = fbeta)
-
         for i in range(n_runs):
             result_path = os.path.join(r_path, classifier + "_" + method + '_run_' + str(i + 1) + ".txt")
             open(result_path, "w").close() 
             logging.info('Run {}:'.format(str(i)))
 
             # create classifier
-            myclassif = MyClassifier(estimator = classifier, method = method, splits = n_folds, path = self.out_folder, run = i + 1)
+            myclassif = MyClassifier(
+                estimator = classifier, 
+                method = method, 
+                splits = n_folds, 
+                path = self.out_folder, 
+                run = i + 1,
+                fbeta = fbeta
+            )
 
             # if a balancing method was provided, create an according balancer
             balancer = None
-            if undersample:
+            if balancing_method == 'undersample':
                 balancer = RandomUnderSampler(sampling_strategy = sampling_strategy, random_state = 42 + i)     
-            elif oversample:
+            elif balancing_method == 'smote':
                 balancer = SMOTE(sampling_strategy = sampling_strategy, random_state = 42 + i)
-
+            elif balancing_method == 'smoten':
+                # this assumes your data is categorical only!
+                balancer = SMOTEN(sampling_strategy = sampling_strategy, random_state = 42 + i)
+            elif balancing_method == 'smotenc':
+                # grab all categorical columns: assuming they are one-hot-encoded, they should only have 2 or less unique values
+                unique_threshold = 2
+                X_withnames = self.train_data.drop(columns = ['ID_1', target_column])
+                categorical_column_indices = [i for i, column in enumerate(X_withnames.columns) if X_withnames[column].nunique() <= unique_threshold]
+                balancer = SMOTENC(
+                    categorical_features = categorical_column_indices, 
+                    sampling_strategy = sampling_strategy, 
+                    random_state = 42 + i
+                )
+                
             # if a balancer was created, create the cross-validation pipeline with it
             if balancer is None:
                 _pipeline = make_pipeline(myclassif)
@@ -312,7 +325,7 @@ class ClassifierHelper():
             parms, itr = ClassifierHelper.getParameters(classifier)
             parms = {'myclassifier__' + key: parms[key] for key in parms}
 
-            # hyperparameter tuning
+            # hyperparameter tuning CHANGE THE SCORER 
             grid_imba = BayesSearchCV(
                 _pipeline, 
                 search_spaces = parms, 
@@ -321,7 +334,6 @@ class ClassifierHelper():
                 refit = False, 
                 n_jobs = -1, 
                 n_points = 3,
-                scoring = scorer
             )
             grid_imba.fit(X_train, y_train)
 
@@ -395,12 +407,16 @@ class ClassifierHelper():
                 
                 yp = Tester.predict(X_test)
                 fbeta_result = fbeta_score(y_test, yp, beta = fbeta)
+                acc = accuracy_score(y, yp)
+                balanced = balanced_accuracy_score(y, yp)
 
                 # output results
                 trainTest = open(train_test_path, "a")
                 confMatrix = confusion_matrix(y_test,yp)
                 trainTest.write('Run {}, test sample {}:'.format(str(i), str(j)))
                 trainTest.write('F-beta score: {:.4f}\n'.format(fbeta_result))
+                trainTest.write('Accuracy: {:.4f}\n'.format(acc))
+                trainTest.write('Balanced accuracy: {:.4f}\n'.format(balanced))
                 trainTest.write(str(grid_imba.best_params_)+'\n')
                 trainTest.write(str(confMatrix).replace(' [', '').replace('[', '').replace(']', '') + '\n\n')
                 trainTest.close()
