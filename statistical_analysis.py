@@ -198,6 +198,40 @@ class Stat_Analyzer():
         mc = MultiComparison(data[target], data[indep_1])
         result = mc.tukeyhsd()
         f.write(str(result))
+        
+        # Reorganize the data to separate Male and Female
+        male_data = data[data[indep_2] == 1]
+        female_data = data[data[indep_2] == 0]
+        
+        # Set the positions of the bars
+        bar_width = 0.35
+        male_positions = np.arange(len(male_data))
+        female_positions = male_positions + bar_width
+        
+        # Create the figure and axes
+        fig, ax = plt.subplots()
+        
+        # Plot the bars for Male and Female with error bars
+        male_bars = ax.bar(male_positions, male_data["Depression Score"], bar_width, yerr=male_data["Standard Error"], 
+                           color="gray", capsize=5)
+        female_bars = ax.bar(female_positions, female_data["Depression Score"], bar_width, yerr=female_data["Standard Error"], 
+                             color="white", edgecolor="black", capsize=5)
+        
+        # Set x-ticks and labels
+        ax.set_xticks(male_positions + bar_width / 2)
+        ax.set_xticklabels(['Male', 'Female'])
+        
+        # Set axis labels and title
+        ax.set_xlabel('Gender')
+        ax.set_ylabel('Depression Score')
+        ax.set_title('Bar Plot with Error Bars for Gender and SNP Type')
+        
+        # Add a legend for SNP Types
+        ax.legend(handles=[male_bars, female_bars], labels=['Type A', 'Type B'])
+        
+        # Show the plot
+        plt.tight_layout()
+        plt.show()
     
     def __detect_outliers_tukey(self, data, group_col, y_col, threshold=1.5):
         outliers = []

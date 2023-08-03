@@ -92,14 +92,14 @@ def main():
 
         bootstrap_loc = ''
 
-        for i in range(len(paths)):
-            chrom_name = re.search('(?<=_)c[0-9]+(_i[0-9]+)?', paths[i]).group(0) # regex that grabs c{}, where {} is replaced by chrom number
-            chrom_data = pd.read_csv(paths[i], index_col = 0)
+        for j in range(len(paths)):
+            chrom_name = re.search('(?<=_)c[0-9]+(_i[0-9]+)?', paths[j]).group(0) # regex that grabs c{}, where {} is replaced by chrom number
+            chrom_data = pd.read_csv(paths[j], index_col = 0)
             binary_fs_data = merge_for_fs(chrom_data, DEPRESSION_DATA_PATH, sex = group, outcome = 'bin')
             continuous_fs_data = merge_for_fs(chrom_data, DEPRESSION_DATA_PATH, sex = group, outcome = 'cont')
 
             # for first run, bootstrap must be randomized
-            if i == 0:
+            if j == 0:
                 # binary feature selection
                 bin_output_dir = os.path.join(first_round_dir, FIRST_ROUND_BINARY_FORMAT.format(chrom_name))
                 fselect = FeatureSelector(
