@@ -406,15 +406,16 @@ class ClassifierHelper():
                 y_test = test_data[target_column].to_numpy()
                 
                 yp = Tester.predict(X_test)
-                fbeta_result = fbeta_score(y_test, yp, beta = fbeta)
-                acc = accuracy_score(y, yp)
-                balanced = balanced_accuracy_score(y, yp)
+                acc = accuracy_score(y_test, yp)
+                balanced = balanced_accuracy_score(y_test, yp)
 
                 # output results
                 trainTest = open(train_test_path, "a")
                 confMatrix = confusion_matrix(y_test,yp)
                 trainTest.write('Run {}, test sample {}:'.format(str(i), str(j)))
-                trainTest.write('F-beta score: {:.4f}\n'.format(fbeta_result))
+                if fbeta is not None:
+                    fbeta_result = fbeta_score(y_test, yp, beta = fbeta)
+                    trainTest.write('F-beta score: {:.4f}\n'.format(fbeta_result))
                 trainTest.write('Accuracy: {:.4f}\n'.format(acc))
                 trainTest.write('Balanced accuracy: {:.4f}\n'.format(balanced))
                 trainTest.write(str(grid_imba.best_params_)+'\n')
