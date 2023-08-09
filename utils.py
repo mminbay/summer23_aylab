@@ -65,7 +65,7 @@ def reorder_cols(data, cols = ['ID_1', 'PHQ9', 'PHQ9_binary']):
     '''
     Return a view of a dataframe where the provided columns are at the end. 
     '''
-    new_cols_order = [col for col in data.columns if col not in cols] + cols
+    new_cols_order = [col for col in data.columns if col not in cols] + [col for col in cols if col in data.columns]
     return data[new_cols_order]
 
 def merge_for_fs(snp_data, depression_path, sex = None, outcome = 'bin'):
@@ -75,8 +75,11 @@ def merge_for_fs(snp_data, depression_path, sex = None, outcome = 'bin'):
 
     Arguments:
         snp_data (DataFrame) -- dataframe containing SNP information and ID_1. there should be no other columns
+        depression_path (str) -- path to .csv file containing clinical factor and PHQ9 data
+        sex ('male', 'female') -- if provided, result dataframe will be filtered for sex
+        outcome ('bin', 'cont') -- type of PHQ9 variable to maintain in the result dataframe
     '''
-    depression_data = pd.read_csv(depression_path, index_col = 0)
+    depression_data = pd.read_csv(depression_path, usecols = ['ID_1', 'PHQ9', 'PHQ9_binary', 'Sex'])
     final = snp_data.merge(depression_data, on = 'ID_1')
     if sex == 'male':
         final = final[final['Sex'] == 1]
@@ -88,7 +91,7 @@ def merge_for_fs(snp_data, depression_path, sex = None, outcome = 'bin'):
         final.drop(columns = ['PHQ9'], inplace = True)
     else:
         raise Exception('\'outcome\' parameter must be \'bin\' or \'cont\'')
-    return final
+    return final.drop(columns  = ['Sex'])
 
 def compile_fs_results(dir, identifier = None, out_name = 'compiled.csv'):
     '''

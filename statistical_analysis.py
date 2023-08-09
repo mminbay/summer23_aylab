@@ -9,6 +9,7 @@ import networkx as nx
 import numpy as np
 import os
 import pandas as pd
+import subprocess
 import random
 import researchpy as rp
 from rpy2.robjects.packages import importr
@@ -31,6 +32,7 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 from statsmodels.stats.mediation import Mediation
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from statsmodels.stats.multitest import multipletests
+from utils import reorder_cols
 from utilities import relabel  # hardcoded. relabel functional will be updated when anova needed
 
 '''
@@ -48,17 +50,17 @@ class Stat_Analyzer():
         out_folder,
         ohe_columns = [],
         normalize_columns = [],
-        r_path = None,        
+        r_dir = None,        
     ):
         '''
         Arguments:
-            data (DataFrame) -- dataframe to be analyzed. this should only contain the ID_1 columns, feature columns, and outcome columns. features should be normalized but not one-hot encoded.
+            data (DataFrame) -- dataframe to be analyzed. this should only contain the ID_1 columns, feature columns, and outcome columns. features can be normalized but not one-hot encoded.
             bin_outcome (str) -- column label of the binarized outcome on the dataframe.
             cont_outcome (str) -- column label of the continuous outcome on the dataframe.
             out_folder (str) -- where this instance will output results
-            ohe_columns (list(str)) -- column identifiers to 
-            r_path (str) -- path to directory containing Rscripts that are needed for some statistical analysis
-
+            ohe_columns (list(str)) -- column identifiers to one-hot-encode
+            normalize_columns (list(str)) -- column identifiers to normalize
+            r_dir (str) -- path to directory containing Rscripts for some statistical analyses    
         '''
         for col in normalize_columns:
             min_val = data[col].min()
@@ -79,7 +81,7 @@ class Stat_Analyzer():
         self.cont_ohc = cont_ohc
         self.bin = bin
         self.cont = cont
-        self.r_path = r_path
+        self.r_dir = r_dir
         self.out_folder = out_folder
 
         self.ARL = dict()
@@ -88,6 +90,57 @@ class Stat_Analyzer():
         self.logisticRegression = dict()
         self.oneANOVA = dict()
         self.twoANOVA = dict()
+
+    def scheirer_ray_hare(
+        self,
+        snps_file_path,
+        snp_column,
+        curr_snp,
+        sex_column = 'Sex',
+        phq9_column = 'PHQ9',
+        out_file = None
+    ):
+        if curr_snp not in ['single', 'pair']:
+            raise Exception('Argument \'curr_snp\' must be either \'single\' or \'pair\'')
+        result_folder = os.path.join(self.out_folder, 'scheirer_ray_hare')
+        if not os.path.exists(result_folder):
+            os.makedirs(result_folder)
+
+        data = self.cont_ohc.copy(deep = True)
+        data = reorder_cols(data)
+        tmp_path = os.path.join(result_folder, 'srh_tmp.csv')
+        if out_file is None:
+            file_name = os.path.basename(tmp_path)
+            output_name = '{}_{}_SRH.csv'.format(file_name, snp_column)
+            out_file = os.path.join(result_folder, output_name)
+        data.to_csv(tmp_path, index = False)
+
+        # Construct the command to run the R script with arguments
+        command = [
+            "Rscript",
+            os.path.join(self.r_dir, 'srh_revised.R'),
+            tmp_path, 
+            snps_file_path, 
+            snp_column, 
+            curr_snp, 
+            sex_column, 
+            phq9_column, 
+            out_file
+        ]
+        
+        # Execute the R script through the command line
+        process = subprocess.run(command, capture_output = True, text = True)
+        
+        # Check the return code and print the output and errors (if any)
+        if process.returncode == 0:
+            print("R script executed successfully.")
+            print("Output:")
+            print(process.stdout)
+        else:
+            print("Error occurred while running the R script.")
+            print("Errors:")
+            print(process.stderr)
+        
 
     def one_way_anova(
         self,
@@ -315,18 +368,17 @@ class Stat_Analyzer():
             f.close()
             print(med.summary())
 
-    # ARL below was written mostly by chatgpt, so we may have to check for errors. doesn't use R. refer to cole's code for the old version
     def association_rule_learning(
         self, 
-        continuous=[],
-        min_support=0.00045, 
-        min_confidence=0.02, 
-        min_items=2, 
-        max_items=5, 
-        min_lift=2, 
-        protective=False,
+        continuous = [],
+        min_support = 0.00045, 
+        min_confidence = 0.02, 
+        min_items = 2, 
+        max_items = 5, 
+        min_lift = 2, 
+        protective = False,
         drop_pairs = True,
-        out_file='arl.csv'
+        out_file = 'arl.csv'
     ):
         '''
         Conducts association rule learning on binarized, OHC data for given target variable.
@@ -344,51 +396,109 @@ class Stat_Analyzer():
             drop_pairs -- if True, columns containing 'pair:' will be dropped
             out_file -- name of output .txt file (no extension required)
         '''
-        data = self.bin_ohc_wbase.copy(deep=True)
+        data = self.bin_ohc_wbase.copy(deep = True)
         target = self.bin_outcome
         data.drop(columns = data.filter(regex = '^pair:').columns, inplace = True)
-        print(data.shape)
 
-        data.drop(columns = continuous, inplace=True)
+        data.drop(columns = continuous, inplace = True)
         # remove all columns with more than 2 unique values -- this ensures all features are binarized
         for col in data.columns:
             if len(data[col].unique()) > 2:
                 data.drop([col], axis=1, inplace=True)
 
-        data = data.astype(bool)
-        
+        data = data.astype(bool)        
+        if protective:
+            data[target] = ~data[target]
+        data = reorder_cols(data)
         result_folder = os.path.join(self.out_folder, 'association_rule_learning')
         if not os.path.exists(result_folder):
             os.makedirs(result_folder)
-            
-        if protective:
-            data[target] = ~data[target]
+        data.to_csv(os.path.join(result_folder, 'AprioriData.csv'))
 
-        # Generate association rules using mlxtend
-        if protective:
-            rules = apriori(data, min_support=min_support, use_colnames=True)
-            rules = association_rules(rules, metric="lift", min_threshold=min_lift)
+        command = [
+            "Rscript",   
+            os.path.join(self.r_dir, 'Association_Rules.R'),
+            result_folder, 
+            str(min_support), 
+            str(min_confidence), 
+            str(max_items), 
+            str(min_items), 
+            str(target), 
+            str(min_lift)
+        ]
+        
+        process = subprocess.run(command, capture_output = True, text = True)
+
+        os.remove(os.path.join(result_folder, 'AprioriData.csv'))
+        if os.path.exists(os.path.join(result_folder, 'apriori.csv')):
+            ARLRules = pd.read_csv(os.path.join(result_folder, 'apriori.csv'))
+            pvals = ARLRules['pValue']
+            pvals = fdr_correction(pvals, alpha=0.05, method='indep')
+            ARLRules['adj pVals'] = pvals[1]
         else:
-            rules = apriori(data, min_support=min_support, use_colnames=True)
-            rules = association_rules(rules, metric="lift", min_threshold=min_lift)
+            print('No rules meeting minimum requirements were found')
+            print('Process Terminated')
+            return
+        os.remove(os.path.join(result_folder, 'apriori.csv')) 
+
+        vars = ARLRules['LHS'].tolist()
+        features, newF, rows, pvals = list(), list(), list(), list()
+        oddsRatios = pd.DataFrame(columns=['LHS-RHS', 'Odds Ratio', 'Confidence Interval', 'pValue', 'adjusted pVal'])
+        for var in vars:
+            newF.append(var)
+            features.append(var.replace('{', '').replace('}', '').split(','))
+        for i in range(len(features)):
+            cols = features[i]
+            newFeature = newF[i]
+            dataC = data.drop([x for x in data.columns if x not in cols], axis = 1)
+            dataC[newFeature] = dataC[dataC.columns[:]].apply(lambda x: ','.join(x.astype(str)),axis=1)
+            dataC = dataC[[newFeature]]
+            dataC[target] = data[target]
+            toDrop = list()
+            for index, r in dataC.iterrows():                
+                fValue = set(r[newFeature].split(','))
+                if (len(fValue) > 1):
+                    toDrop.append(index)
+            dataC.drop(toDrop, inplace = True)
+            dataTrue = dataC[dataC[target] == 1].drop([target], axis =1).value_counts().tolist()
+            dataFalse = dataC[dataC[target] == 0].drop([target], axis = 1).value_counts().tolist()
+            if len(dataTrue) == 1:
+                dataTrue.append(0)
+            if len(dataFalse) == 1:
+                dataFalse.append(0)
+            dataTrue.reverse(); dataFalse.reverse()
             
-        rules = rules[rules['consequents'].astype(str).str.contains(target)]
-        # Filter rules based on length
-        rules = rules[(rules['antecedents'].apply(lambda x: len(x)) >= min_items) &
-                    (rules['antecedents'].apply(lambda x: len(x)) <= max_items)]
+            table = np.array([dataTrue, dataFalse])
+            print(table)
+            res = statsmodels.stats.contingency_tables.Table2x2(table, shift_zeros = True)
 
-        rules = rules[rules["consequents"].astype(str).str.contains(target)]
-        rules["antecedents"] = rules["antecedents"].apply(lambda x: ', '.join(list(x))).astype("unicode")
-        rules["consequents"] = rules["consequents"].apply(lambda x: ', '.join(list(x))).astype("unicode")
+            rows.append([str(newFeature)+'-'+str(rhs), 
+            res.oddsratio, res.oddsratio_confint(), res.oddsratio_pvalue()])
+            pvals.append(res.oddsratio_pvalue())
+            
+        pvals = fdr_correction(pvals, alpha=0.05, method='indep')
+        for i in range(len(pvals[1])):
+            rows[i].append(pvals[1][i])
+            oddsRatios.loc[len(oddsRatios.index)] = rows[i]
+            
+            
 
-        # Sort rules by lift
-        rules = rules.sort_values(by='lift', ascending=False)
+        Association = open(os.path.join(result_folder, out_file), 'w')
+        Association.write(ARLRules.to_string(index = False))
+        Association.write('\n\n----------------------------------------------------------------------------------------\n\n')
+        Association.write('\n\nOdds Ratio analysis for Association Rule Learning: \n----------------------------------------------------------------------------------------\n\n')
+        for i in range(len(oddsRatios)):
+            two_var = oddsRatios.iloc[i, :]
+            two_var = two_var.to_frame()
+            variables = str(two_var.iloc[0,0]).split('-')
+            two_var = two_var.iloc[1: , :]
+            Association.write('The odds ratio, p-Value, and confidence interval between ' + variables[0]+' and ' + variables[1] + ' are: \n\n')
+            toWrite = two_var.to_string(header = False, index = True)
+            Association.write(toWrite+'\n')
+            Association.write('----------------------------------------------------------------------------------------\n\n')
 
-        if rules.empty:
-            print('No association rules found.')
-
-        rules.to_csv(os.path.join(self.out_folder, 'association_rule_learning', 'arl_results{}.csv'.format('_protective' if protective else '')))
-    
+        Association.close()
+        
     def multivariate_linear_regression(self, out_file = 'mvlin.csv'):
         '''
         Runs multivariate regression on continuous, OHC data for given target variable.
