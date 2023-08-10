@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 from mlxtend.frequent_patterns import apriori
 from mlxtend.frequent_patterns import association_rules
 from mne.stats import fdr_correction
+# import multiprocessing as mp
+from pathos.multiprocessing import Pool
 import networkx as nx
 import numpy as np
 import os
@@ -12,15 +14,16 @@ import pandas as pd
 import subprocess
 import random
 import researchpy as rp
-from rpy2.robjects.packages import importr
-from rpy2.robjects import r, pandas2ri, numpy2ri
-import rpy2.robjects as ro
-numpy2ri.activate()
-from rpy2.robjects.conversion import localconverter
+# from rpy2.robjects.packages import importr
+# from rpy2.robjects import r, pandas2ri, numpy2ri
+# import rpy2.robjects as ro
+# numpy2ri.activate()
+# from rpy2.robjects.conversion import localconverter
 from scipy.stats import sem
 from scipy import stats
 import scikit_posthocs as sp
 import seaborn as sns
+from shared_objects import SharedNumpyArray, SharedPandasDataFrame
 import statsmodels
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
@@ -66,6 +69,9 @@ class Stat_Analyzer():
             min_val = data[col].min()
             max_val = data[col].max()
             data[col] = (data[col] - min_val) / (max_val - min_val)
+
+        for col in ohe_columns:
+            data[col] = data[col].astype(int)
         
         bin = data.drop(columns = [cont_outcome])
         cont = data.drop(columns = [bin_outcome])
@@ -378,7 +384,7 @@ class Stat_Analyzer():
         min_lift = 2, 
         protective = False,
         drop_pairs = True,
-        out_file = 'arl.csv'
+        out_file = 'arl.txt'
     ):
         '''
         Conducts association rule learning on binarized, OHC data for given target variable.
@@ -392,13 +398,25 @@ class Stat_Analyzer():
             min_items -- minimum number of item in the rules including both sides
             max_items -- maximum number of item in the rules including both sides
             min_lift -- minimum value for lift for the rule to be considered
-            protective -- if True, the rhs values will be flipped to find protective features
+            protective -- if True, the target values will be flipped to find protective features
             drop_pairs -- if True, columns containing 'pair:' will be dropped
             out_file -- name of output .txt file (no extension required)
         '''
         data = self.bin_ohc_wbase.copy(deep = True)
-        target = self.bin_outcome
+        # the following column modifications are hot garbage, please make them more efficient
+        new_columns = []
+        for column in data.columns:
+            if column[0].isdigit():
+                new_columns.append('SNP:' + column)
+            else:
+                new_columns.append(column)        
+        data.columns = new_columns
         data.drop(columns = data.filter(regex = '^pair:').columns, inplace = True)
+        data.columns = data.columns.str.replace(' ', '_', regex = False)
+        data.columns = data.columns.str.replace('/', '_', regex = False)
+        data.columns = data.columns.str.replace('.', '_', regex = False)
+        data.columns = data.columns.str.replace(':', '_', regex = False)
+        target = self.bin_outcome
 
         data.drop(columns = continuous, inplace = True)
         # remove all columns with more than 2 unique values -- this ensures all features are binarized
@@ -406,14 +424,15 @@ class Stat_Analyzer():
             if len(data[col].unique()) > 2:
                 data.drop([col], axis=1, inplace=True)
 
-        data = data.astype(bool)        
+        data = data.astype(int)        
         if protective:
             data[target] = ~data[target]
         data = reorder_cols(data)
         result_folder = os.path.join(self.out_folder, 'association_rule_learning')
         if not os.path.exists(result_folder):
             os.makedirs(result_folder)
-        data.to_csv(os.path.join(result_folder, 'AprioriData.csv'))
+        data.to_csv(os.path.join(result_folder, 'AprioriData.csv'), index = False)
+        csv_path = os.path.join(result_folder, out_file.split('.')[0] + '.csv')
 
         command = [
             "Rscript",   
@@ -423,15 +442,27 @@ class Stat_Analyzer():
             str(min_confidence), 
             str(max_items), 
             str(min_items), 
-            str(target), 
-            str(min_lift)
+            target, 
+            str(min_lift),
+            csv_path
         ]
         
         process = subprocess.run(command, capture_output = True, text = True)
 
+        if process.returncode == 0:
+            print("R script executed successfully.")
+            print("Output:")
+            print(process.stdout)
+        else:
+            print("Error occurred while running the R script.")
+            print("Errors:")
+            print(process.stdout)
+            print(process.stderr)
+            raise Exception('za')
+
         os.remove(os.path.join(result_folder, 'AprioriData.csv'))
-        if os.path.exists(os.path.join(result_folder, 'apriori.csv')):
-            ARLRules = pd.read_csv(os.path.join(result_folder, 'apriori.csv'))
+        if os.path.exists(csv_path):
+            ARLRules = pd.read_csv(csv_path)
             pvals = ARLRules['pValue']
             pvals = fdr_correction(pvals, alpha=0.05, method='indep')
             ARLRules['adj pVals'] = pvals[1]
@@ -439,7 +470,6 @@ class Stat_Analyzer():
             print('No rules meeting minimum requirements were found')
             print('Process Terminated')
             return
-        os.remove(os.path.join(result_folder, 'apriori.csv')) 
 
         vars = ARLRules['LHS'].tolist()
         features, newF, rows, pvals = list(), list(), list(), list()
@@ -447,14 +477,17 @@ class Stat_Analyzer():
         for var in vars:
             newF.append(var)
             features.append(var.replace('{', '').replace('}', '').split(','))
-        for i in range(len(features)):
-            cols = features[i]
-            newFeature = newF[i]
-            dataC = data.drop([x for x in data.columns if x not in cols], axis = 1)
+
+        shared_data = SharedPandasDataFrame(data)
+
+        args = [(features[i], newF[i], shared_data) for i in range(len(features))]
+
+        def arl_stats_wrapper(cols, newFeature, shared_data_pointer):
+            dataC = shared_data_pointer.read()[cols]
             dataC[newFeature] = dataC[dataC.columns[:]].apply(lambda x: ','.join(x.astype(str)),axis=1)
             dataC = dataC[[newFeature]]
-            dataC[target] = data[target]
-            toDrop = list()
+            dataC[target] = shared_data_pointer.read()[target]
+            toDrop = []
             for index, r in dataC.iterrows():                
                 fValue = set(r[newFeature].split(','))
                 if (len(fValue) > 1):
@@ -472,19 +505,19 @@ class Stat_Analyzer():
             print(table)
             res = statsmodels.stats.contingency_tables.Table2x2(table, shift_zeros = True)
 
-            rows.append([str(newFeature)+'-'+str(rhs), 
-            res.oddsratio, res.oddsratio_confint(), res.oddsratio_pvalue()])
-            pvals.append(res.oddsratio_pvalue())
-            
+            return [str(newFeature)+'-'+str(target), res.oddsratio, res.oddsratio_confint(), res.oddsratio_pvalue()]
+
+        with Pool() as pool:
+            rows = pool.starmap(arl_stats_wrapper, args)
+
+        shared_data.unlink()
+        pvals = [row[-1] for row in rows]           
         pvals = fdr_correction(pvals, alpha=0.05, method='indep')
         for i in range(len(pvals[1])):
             rows[i].append(pvals[1][i])
             oddsRatios.loc[len(oddsRatios.index)] = rows[i]
-            
-            
-
+                      
         Association = open(os.path.join(result_folder, out_file), 'w')
-        Association.write(ARLRules.to_string(index = False))
         Association.write('\n\n----------------------------------------------------------------------------------------\n\n')
         Association.write('\n\nOdds Ratio analysis for Association Rule Learning: \n----------------------------------------------------------------------------------------\n\n')
         for i in range(len(oddsRatios)):

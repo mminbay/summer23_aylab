@@ -59,6 +59,7 @@ def snpassoc_wrapper(script_path, data_path, outcome):
     else:
         print("Error occurred while running the R script.")
         print("Errors:")
+        print(process.stdout)
         print(process.stderr)
 
 def reorder_cols(data, cols = ['ID_1', 'PHQ9', 'PHQ9_binary']):
