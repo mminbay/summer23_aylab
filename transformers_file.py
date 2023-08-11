@@ -8,7 +8,7 @@ from statistical_analysis import Stat_Analyzer
 sex = 'overall'
 target_column = 'PHQ9_binary'
 
-data = pd.read_csv('/home/mminbay/summer_research/depression_study/{}_train_final_features.csv'.format(sex), index_col = 0)
+data = pd.read_csv('/home/mminbay/jonathan/overall_final_features_2g.csv', index_col = 0)
 
 sa = Stat_Analyzer(
     data,
@@ -19,7 +19,11 @@ sa = Stat_Analyzer(
     r_dir = '/home/mminbay/summer_research/summer23_aylab/Rscripts/',
 )
 
-sa.association_rule_learning(out_file = 'monkey_doo.txt')
+sa.scheirer_ray_hare(
+    '/home/mminbay/jonathan/overall_pair_snp_gene_data.csv',
+    'pair',
+    'Sex',
+)
 
 # train_data = pd.read_csv('/home/mminbay/summer_research/depression_study/{}_train_final_features.csv'.format(sex), index_col = 0).drop(columns = ['PHQ9'])
 # train_data['Chronotype_bin'] = (train_data['Chronotype'] > 2).astype(int)

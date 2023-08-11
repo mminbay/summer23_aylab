@@ -100,25 +100,25 @@ class Stat_Analyzer():
     def scheirer_ray_hare(
         self,
         snps_file_path,
-        snp_column,
         curr_snp,
         sex_column = 'Sex',
-        phq9_column = 'PHQ9',
-        out_file = None
     ):
+        target = self.cont_outcome
         if curr_snp not in ['single', 'pair']:
             raise Exception('Argument \'curr_snp\' must be either \'single\' or \'pair\'')
-        result_folder = os.path.join(self.out_folder, 'scheirer_ray_hare')
+        result_folder = os.path.join(self.out_folder, 'scheirer_ray_hare/')
         if not os.path.exists(result_folder):
             os.makedirs(result_folder)
 
         data = self.cont_ohc.copy(deep = True)
         data = reorder_cols(data)
+        # if curr_snp == 'single':           
+        #     filtered_columns = data.filter(regex = '^(rs|\d)')
+        # elif curr_snp == 'pair':
+        #     filtered_columns = data.filter(regex = '^pair:')
+        # filtered_columns[target] = data[target]
+        # filtered_columns[sex_column] = data[sex_column]
         tmp_path = os.path.join(result_folder, 'srh_tmp.csv')
-        if out_file is None:
-            file_name = os.path.basename(tmp_path)
-            output_name = '{}_{}_SRH.csv'.format(file_name, snp_column)
-            out_file = os.path.join(result_folder, output_name)
         data.to_csv(tmp_path, index = False)
 
         # Construct the command to run the R script with arguments
@@ -126,18 +126,15 @@ class Stat_Analyzer():
             "Rscript",
             os.path.join(self.r_dir, 'srh_revised.R'),
             tmp_path, 
-            snps_file_path, 
-            snp_column, 
+            snps_file_path,
             curr_snp, 
             sex_column, 
-            phq9_column, 
-            out_file
+            target, 
+            result_folder
         ]
         
-        # Execute the R script through the command line
         process = subprocess.run(command, capture_output = True, text = True)
         
-        # Check the return code and print the output and errors (if any)
         if process.returncode == 0:
             print("R script executed successfully.")
             print("Output:")
@@ -145,7 +142,10 @@ class Stat_Analyzer():
         else:
             print("Error occurred while running the R script.")
             print("Errors:")
+            print(process.stdout)
             print(process.stderr)
+
+        os.remove(tmp_path)
         
 
     def one_way_anova(
