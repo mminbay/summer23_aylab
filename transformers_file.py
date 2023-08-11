@@ -19,10 +19,18 @@ sa = Stat_Analyzer(
     r_dir = '/home/mminbay/summer_research/summer23_aylab/Rscripts/',
 )
 
-sa.scheirer_ray_hare(
-    '/home/mminbay/jonathan/overall_pair_snp_gene_data.csv',
-    'pair',
-    'Sex',
+# sa.scheirer_ray_hare(
+#     '/home/mminbay/jonathan/overall_pair_snp_gene_data.csv',
+#     'pair',
+#     'Sex',
+# )
+
+sa.mediation_analysis(
+    'cont',
+    'Age_n',
+    ['rs141716729'],
+    mediator_type = 'cont',
+    sims = 50
 )
 
 # train_data = pd.read_csv('/home/mminbay/summer_research/depression_study/{}_train_final_features.csv'.format(sex), index_col = 0).drop(columns = ['PHQ9'])

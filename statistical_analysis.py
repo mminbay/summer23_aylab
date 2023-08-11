@@ -103,6 +103,14 @@ class Stat_Analyzer():
         curr_snp,
         sex_column = 'Sex',
     ):
+        '''
+        Runs SRH test. Docstring WIP
+
+        Arguments:
+            snps_file_path (str) --
+            curr_snp ('single', 'pair') --
+            sex_column (str) --
+        '''
         target = self.cont_outcome
         if curr_snp not in ['single', 'pair']:
             raise Exception('Argument \'curr_snp\' must be either \'single\' or \'pair\'')
@@ -112,16 +120,9 @@ class Stat_Analyzer():
 
         data = self.cont_ohc.copy(deep = True)
         data = reorder_cols(data)
-        # if curr_snp == 'single':           
-        #     filtered_columns = data.filter(regex = '^(rs|\d)')
-        # elif curr_snp == 'pair':
-        #     filtered_columns = data.filter(regex = '^pair:')
-        # filtered_columns[target] = data[target]
-        # filtered_columns[sex_column] = data[sex_column]
         tmp_path = os.path.join(result_folder, 'srh_tmp.csv')
         data.to_csv(tmp_path, index = False)
 
-        # Construct the command to run the R script with arguments
         command = [
             "Rscript",
             os.path.join(self.r_dir, 'srh_revised.R'),
@@ -147,7 +148,6 @@ class Stat_Analyzer():
 
         os.remove(tmp_path)
         
-
     def one_way_anova(
         self,
         indep,
@@ -309,38 +309,41 @@ class Stat_Analyzer():
         dep,
         med,
         indep,
-        continuous
+        mediator_type = 'bin',
+        sims = 100
     ):
         '''
         Conducts mediation analysis on continous, OHC data for given dependent variable, mediator, and independent variable(s).
         Saves results as a .csv file
 
         Arguments:
-            dep ('bin', 'cont') -- whether 
-            med -- mediator variable
-            indep -- independent variable, or list of independent variables
-            continuous -- list of continuous variables
-            sims -- i don't even know
+            dep ('bin', 'cont') -- which outcome variable to use 
+            med (str) -- column identifier of mediator variable
+            indep (str or list(str)) -- (list of) column identifier of independent variable(s)
+            mediatior_type ('bin', 'cont') -- whether the mediator variable is binary or continuous. 
+            sims (int) -- how many simulations to run for each mediation analysis
         '''
         if dep == 'bin':
-            dep = self.bin_outcome
+            target = self.bin_outcome
             data = self.bin_ohc.copy(deep = True)
         elif dep == 'cont':
-            dep = self.cont_outcome
+            target = self.cont_outcome
             data = self.cont_ohc.copy(deep = True)
         else:
             raise Exception('Argument \'dep\' for mediation analysis must be either \'bin\' or \'cont\'')
 
-        data.columns = data.columns.str.replace(' ', '_')
-        data.columns = data.columns.str.replace('.', '_')
+        data.columns = data.columns.str.replace(' ', '_', regex = False)
+        data.columns = data.columns.str.replace('.', '_', regex = False)
 
         med = med.replace('.', '_').replace(' ', '_')
-        dep = dep.replace('.', '_').replace(' ', '_')
+        target = target.replace('.', '_').replace(' ', '_')
 
         result_folder = os.path.join(self.out_folder, 'mediation_analysis')
 
         if not os.path.exists(result_folder):
             os.makedirs(result_folder)
+        tmp_path = os.path.join(result_folder, 'ma_tmp.csv')
+        data.to_csv(tmp_path)
         
         # convert indep to a list if a single var was passed
         if type(indep) == str:
@@ -349,30 +352,32 @@ class Stat_Analyzer():
         
         for i in range(len(indep)):
             var = indep[i].replace('.', '_').replace(' ', '_')
-            current_var_file = str(var) + '-' + str(med) + '-' + str(dep) + '.txt'
-            result_file = os.path.join(result_folder, current_var_file)
-            f = open(result_file, 'w+')
-
-            mediation_formula = med + ' ~ ' + var
-            outcome_formula = dep + ' ~ ' + var + ' + ' + med
-            print('Med formula = {}'.format(mediation_formula))
-            print('Dep formula = {}'.format(outcome_formula))
+            command = [
+                "Rscript",
+                os.path.join(self.r_dir, 'mediationAnalysis.R'),
+                tmp_path, 
+                var,
+                med,
+                mediator_type,
+                target, 
+                dep,
+                str(sims)
+            ]
             
-            probit = links.probit
-            if med in continuous:
-                model_m = sm.OLS.from_formula(mediation_formula, data)
-            else:          
-                model_m = sm.GLM.from_formula(mediation_formula, data, family=sm.families.Binomial(link=probit()))
+            process = subprocess.run(command, capture_output = True, text = True)
             
-            if dep == self.cont_outcome:
-                model_y = sm.OLS.from_formula(outcome_formula, data)
+            if process.returncode == 0:
+                print("R script executed successfully.")
+                print("Output:")
+                print(process.stdout)
             else:
-                model_y = sm.GLM.from_formula(outcome_formula, data, family=sm.families.Binomial(link=probit()))
-                
-            med = Mediation(model_y, model_m, var, med).fit()
-            f.write(str(med.summary()))
-            f.close()
-            print(med.summary())
+                print("Error occurred while running the R script.")
+                print("Errors:")
+                print(process.stdout)
+                print(process.stderr)
+    
+        os.remove(tmp_path)
+            
 
     def association_rule_learning(
         self, 
@@ -391,16 +396,15 @@ class Stat_Analyzer():
         Saves results as a .csv, alongside with plots
 
         Arguments:
-            target -- target column on the dataframe
-            continuous -- list of continuous columns on dataframe. these will be dropped
-            min_support -- minimum value of support for the rule to be considered
-            min_confidence -- minimum value of confidence for the rule to be considered
-            min_items -- minimum number of item in the rules including both sides
-            max_items -- maximum number of item in the rules including both sides
-            min_lift -- minimum value for lift for the rule to be considered
-            protective -- if True, the target values will be flipped to find protective features
-            drop_pairs -- if True, columns containing 'pair:' will be dropped
-            out_file -- name of output .txt file (no extension required)
+            continuous (list(str)) -- list of continuous column identifiers on dataframe. these will be dropped
+            min_support (float) -- minimum value of support for the rule to be considered
+            min_confidence (float) -- minimum value of confidence for the rule to be considered
+            min_items (int) -- minimum number of item in the rules including both sides
+            max_items (int) -- maximum number of item in the rules including both sides
+            min_lift (float) -- minimum value for lift for the rule to be considered
+            protective (bool) -- if True, the target values will be flipped to find protective features
+            drop_pairs (bool) -- if True, columns containing 'pair:' will be dropped
+            out_file (str) -- name of output file. requires .txt extension
         '''
         data = self.bin_ohc_wbase.copy(deep = True)
         # the following column modifications are hot garbage, please make them more efficient
