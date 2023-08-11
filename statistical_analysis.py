@@ -5,21 +5,25 @@ import matplotlib.pyplot as plt
 from mlxtend.frequent_patterns import apriori
 from mlxtend.frequent_patterns import association_rules
 from mne.stats import fdr_correction
+# import multiprocessing as mp
+from pathos.multiprocessing import Pool
 import networkx as nx
 import numpy as np
 import os
 import pandas as pd
+import subprocess
 import random
 import researchpy as rp
-from rpy2.robjects.packages import importr
-from rpy2.robjects import r, pandas2ri, numpy2ri
-import rpy2.robjects as ro
-numpy2ri.activate()
-from rpy2.robjects.conversion import localconverter
+# from rpy2.robjects.packages import importr
+# from rpy2.robjects import r, pandas2ri, numpy2ri
+# import rpy2.robjects as ro
+# numpy2ri.activate()
+# from rpy2.robjects.conversion import localconverter
 from scipy.stats import sem
 from scipy import stats
 import scikit_posthocs as sp
 import seaborn as sns
+from shared_objects import SharedNumpyArray, SharedPandasDataFrame
 import statsmodels
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
@@ -31,6 +35,7 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 from statsmodels.stats.mediation import Mediation
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from statsmodels.stats.multitest import multipletests
+from utils import reorder_cols
 from utilities import relabel  # hardcoded. relabel functional will be updated when anova needed
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -51,22 +56,25 @@ class Stat_Analyzer():
         out_folder,
         ohe_columns = [],
         normalize_columns = [],
-        r_path = None,        
+        r_dir = None,        
     ):
         '''
         Arguments:
-            data (DataFrame) -- dataframe to be analyzed. this should only contain the ID_1 columns, feature columns, and outcome columns. features should be normalized but not one-hot encoded.
+            data (DataFrame) -- dataframe to be analyzed. this should only contain the ID_1 columns, feature columns, and outcome columns. features can be normalized but not one-hot encoded.
             bin_outcome (str) -- column label of the binarized outcome on the dataframe.
             cont_outcome (str) -- column label of the continuous outcome on the dataframe.
             out_folder (str) -- where this instance will output results
-            ohe_columns (list(str)) -- column identifiers to 
-            r_path (str) -- path to directory containing Rscripts that are needed for some statistical analysis
-
+            ohe_columns (list(str)) -- column identifiers to one-hot-encode
+            normalize_columns (list(str)) -- column identifiers to normalize
+            r_dir (str) -- path to directory containing Rscripts for some statistical analyses    
         '''
         for col in normalize_columns:
             min_val = data[col].min()
             max_val = data[col].max()
             data[col] = (data[col] - min_val) / (max_val - min_val)
+
+        for col in ohe_columns:
+            data[col] = data[col].astype(int)
         
         bin = data.drop(columns = [cont_outcome])
         cont = data.drop(columns = [bin_outcome])
@@ -82,7 +90,7 @@ class Stat_Analyzer():
         self.cont_ohc = cont_ohc
         self.bin = bin
         self.cont = cont
-        self.r_path = r_path
+        self.r_dir = r_dir
         self.out_folder = out_folder
 
         self.ARL = dict()
@@ -92,6 +100,57 @@ class Stat_Analyzer():
         self.oneANOVA = dict()
         self.twoANOVA = dict()
 
+    def scheirer_ray_hare(
+        self,
+        snps_file_path,
+        curr_snp,
+        sex_column = 'Sex',
+    ):
+        '''
+        Runs SRH test. Docstring WIP
+
+        Arguments:
+            snps_file_path (str) --
+            curr_snp ('single', 'pair') --
+            sex_column (str) --
+        '''
+        target = self.cont_outcome
+        if curr_snp not in ['single', 'pair']:
+            raise Exception('Argument \'curr_snp\' must be either \'single\' or \'pair\'')
+        result_folder = os.path.join(self.out_folder, 'scheirer_ray_hare/')
+        if not os.path.exists(result_folder):
+            os.makedirs(result_folder)
+
+        data = self.cont_ohc.copy(deep = True)
+        data = reorder_cols(data)
+        tmp_path = os.path.join(result_folder, 'srh_tmp.csv')
+        data.to_csv(tmp_path, index = False)
+
+        command = [
+            "Rscript",
+            os.path.join(self.r_dir, 'srh_revised.R'),
+            tmp_path, 
+            snps_file_path,
+            curr_snp, 
+            sex_column, 
+            target, 
+            result_folder
+        ]
+        
+        process = subprocess.run(command, capture_output = True, text = True)
+        
+        if process.returncode == 0:
+            print("R script executed successfully.")
+            print("Output:")
+            print(process.stdout)
+        else:
+            print("Error occurred while running the R script.")
+            print("Errors:")
+            print(process.stdout)
+            print(process.stderr)
+
+        os.remove(tmp_path)
+        
     def one_way_anova(
         self,
         indep,
@@ -181,8 +240,6 @@ class Stat_Analyzer():
             
         self.one_way_snp_bar_plot(indep, gene_name, alleles[0], alleles[1], grouped_data, snp_out_file)
         
-            
-        
     def one_way_snp_bar_plot(self, snp_name, gene_name, normal_allele, variant_allele, df, output_file):
          # Filter the dataframe based on the normal and variant alleles
         normal_data = df[df['SNP'] == 0]
@@ -219,7 +276,6 @@ class Stat_Analyzer():
         plt.savefig(os.path.join(result_folder, output_file))
         plt.close()
 
-    
     def two_way_anova(
         self,
         indep_1,
@@ -259,10 +315,7 @@ class Stat_Analyzer():
                 print('here')
         elif len(alleles) != 0:
             raise Exception('Please provide a list of 2 alleles in case of 1 SNP, and 4 alleles in the case of a snp pair \n(or do not provide any if you do not want custom axes names). Allele name examples: \nsingle: [AA, GG]; pair: [AA, TT, GG, TT] (where first two are the normal and variant version \nof the snps). Since this deals with the dominant model, you can say TX where X can be T or others \nsince T, the variant, is considered dominant in this model.')
-
-
-        
-        
+    
         data = self.cont_ohc.copy(deep = True)
         target = self.cont_outcome
 
@@ -302,9 +355,7 @@ class Stat_Analyzer():
         mc = MultiComparison(data[target], data[indep_1])
         result = mc.tukeyhsd()
         f.write(str(result))
-
-
-        
+      
         ########## ONE SNP PLOT
         # Group the data by 'SNP' and 'Sex' and calculate the mean for each group
         mean_vals = data.groupby([indep_2, indep_1], as_index = False)[target].mean()
@@ -318,10 +369,7 @@ class Stat_Analyzer():
 
         grouped_data[indep_2] = grouped_data[indep_2].replace({1: 'Male', 0: 'Female'})
         self.one_snp_bar_plot(grouped_data, snp_out_file, gene_names, alleles)
-
-
-
-        
+                              
         ########## SNP PAIR PLOT     
         # # if a snp pair is provided, make this plot in addition to the one above
         # if 'pair' in indep_1:
@@ -351,8 +399,6 @@ class Stat_Analyzer():
 
             
     def one_snp_bar_plot(self, data, out_file, gene_names=None, alleles=None):
-        
-        
         # Sample data in a pandas DataFrame
         '''
         data = pd.DataFrame({
@@ -443,44 +489,43 @@ class Stat_Analyzer():
         dep,
         med,
         indep,
-        continuous,
-        snp_name = None,
-        out_file = None
+        mediator_type = 'bin',
+        sims = 100
     ):
         '''
         Conducts mediation analysis on continous, OHC data for given dependent variable, mediator, and independent variable(s).
         Saves results as a .csv file
 
         Arguments:
-            dep -- dependent variable, or outcome label of your study
-            med -- mediator variable
-            indep -- independent variable, or list of independent variables
-            continuous -- list of continuous variables
-            sims -- i don't even know
-            can give gene/snp combo to name file in snp_name
-            out_file will be the file name if given, otherwise the name will be a combination of med, dep, and indep
+            dep ('bin', 'cont') -- which outcome variable to use 
+            med (str) -- column identifier of mediator variable
+            indep (str or list(str)) -- (list of) column identifier of independent variable(s)
+            mediatior_type ('bin', 'cont') -- whether the mediator variable is binary or continuous. 
+            sims (int) -- how many simulations to run for each mediation analysis
         '''
         if dep == 'bin':
-            dep = self.bin_outcome
+            target = self.bin_outcome
             data = self.bin_ohc.copy(deep = True)
         elif dep == 'cont':
-            dep = self.cont_outcome
+            target = self.cont_outcome
             data = self.cont_ohc.copy(deep = True)
         else:
             raise Exception('Argument \'dep\' for mediation analysis must be either \'bin\' or \'cont\'')
-            
-        data.columns = data.columns.str.replace(' ', '_')
-        data.columns = data.columns.str.replace('.', '_')
+
+        data.columns = data.columns.str.replace(' ', '_', regex = False)
+        data.columns = data.columns.str.replace('.', '_', regex = False)
 
         indep = indep.replace(':', '_')
         
         med = med.replace('.', '_').replace(' ', '_')
-        dep = dep.replace('.', '_').replace(' ', '_')
+        target = target.replace('.', '_').replace(' ', '_')
 
         result_folder = os.path.join(self.out_folder, 'mediation_analysis')
 
         if not os.path.exists(result_folder):
             os.makedirs(result_folder)
+        tmp_path = os.path.join(result_folder, 'ma_tmp.csv')
+        data.to_csv(tmp_path)
         
         # convert indep to a list if a single var was passed
         if type(indep) == str:
@@ -488,113 +533,190 @@ class Stat_Analyzer():
             indep = t
         
         for i in range(len(indep)):
-            if snp_name == None:
-                snp_name = indep[i].replace('.', '_').replace(' ', '_')
-            current_snp_file = str(snp_name) + '-' + str(med) + '-' + str(dep) + '.txt'
-            if out_file != None:
-                result_file = os.path.join(result_folder, out_file)
-            else:
-                result_file = os.path.join(result_folder, current_snp_file)
-            f = open(result_file, 'w+')
-
-
-                
             var = indep[i].replace('.', '_').replace(' ', '_')
-            mediation_formula = med + ' ~ ' + var
-            outcome_formula = dep + ' ~ ' + var + ' + ' + med
-            print('Med formula = {}'.format(mediation_formula))
-            print('Dep formula = {}'.format(outcome_formula))
+            command = [
+                "Rscript",
+                os.path.join(self.r_dir, 'mediationAnalysis.R'),
+                tmp_path, 
+                var,
+                med,
+                mediator_type,
+                target, 
+                dep,
+                str(sims)
+            ]
             
-            probit = links.probit
-            if med in continuous:
-                model_m = sm.OLS.from_formula(mediation_formula, data)
-            else:          
-                model_m = sm.GLM.from_formula(mediation_formula, data, family=sm.families.Binomial(link=probit()))
+            process = subprocess.run(command, capture_output = True, text = True)
             
-            if dep == self.cont_outcome:
-                model_y = sm.OLS.from_formula(outcome_formula, data)
+            if process.returncode == 0:
+                print("R script executed successfully.")
+                print("Output:")
+                print(process.stdout)
             else:
-                model_y = sm.GLM.from_formula(outcome_formula, data, family=sm.families.Binomial(link=probit()))
-                
-            med = Mediation(model_y, model_m, var, med).fit()
-            f.write(str(med.summary()))
-            f.close()
-            print(med.summary())
+                print("Error occurred while running the R script.")
+                print("Errors:")
+                print(process.stdout)
+                print(process.stderr)
+    
+        os.remove(tmp_path)
 
-    # ARL below was written mostly by chatgpt, so we may have to check for errors. doesn't use R. refer to cole's code for the old version
     def association_rule_learning(
         self, 
-        continuous=[],
-        min_support=0.00045, 
-        min_confidence=0.02, 
-        min_items=2, 
-        max_items=5, 
-        min_lift=2, 
-        protective=False,
+        continuous = [],
+        min_support = 0.00045, 
+        min_confidence = 0.02, 
+        min_items = 2, 
+        max_items = 5, 
+        min_lift = 2, 
+        protective = False,
         drop_pairs = True,
-        out_file='arl.csv'
+        out_file = 'arl.txt'
     ):
         '''
         Conducts association rule learning on binarized, OHC data for given target variable.
         Saves results as a .csv, alongside with plots
 
         Arguments:
-            target -- target column on the dataframe
-            continuous -- list of continuous columns on dataframe. these will be dropped
-            min_support -- minimum value of support for the rule to be considered
-            min_confidence -- minimum value of confidence for the rule to be considered
-            min_items -- minimum number of item in the rules including both sides
-            max_items -- maximum number of item in the rules including both sides
-            min_lift -- minimum value for lift for the rule to be considered
-            protective -- if True, the rhs values will be flipped to find protective features
-            drop_pairs -- if True, columns containing 'pair:' will be dropped
-            out_file -- name of output .txt file (no extension required)
+            continuous (list(str)) -- list of continuous column identifiers on dataframe. these will be dropped
+            min_support (float) -- minimum value of support for the rule to be considered
+            min_confidence (float) -- minimum value of confidence for the rule to be considered
+            min_items (int) -- minimum number of item in the rules including both sides
+            max_items (int) -- maximum number of item in the rules including both sides
+            min_lift (float) -- minimum value for lift for the rule to be considered
+            protective (bool) -- if True, the target values will be flipped to find protective features
+            drop_pairs (bool) -- if True, columns containing 'pair:' will be dropped
+            out_file (str) -- name of output file. requires .txt extension
         '''
-        data = self.bin_ohc_wbase.copy(deep=True)
-        target = self.bin_outcome
+        data = self.bin_ohc_wbase.copy(deep = True)
+        # the following column modifications are hot garbage, please make them more efficient
+        new_columns = []
+        for column in data.columns:
+            if column[0].isdigit():
+                new_columns.append('SNP:' + column)
+            else:
+                new_columns.append(column)        
+        data.columns = new_columns
         data.drop(columns = data.filter(regex = '^pair:').columns, inplace = True)
-        print(data.shape)
+        data.columns = data.columns.str.replace(' ', '_', regex = False)
+        data.columns = data.columns.str.replace('/', '_', regex = False)
+        data.columns = data.columns.str.replace('.', '_', regex = False)
+        data.columns = data.columns.str.replace(':', '_', regex = False)
+        target = self.bin_outcome
 
-        data.drop(columns = continuous, inplace=True)
+        data.drop(columns = continuous, inplace = True)
         # remove all columns with more than 2 unique values -- this ensures all features are binarized
         for col in data.columns:
             if len(data[col].unique()) > 2:
                 data.drop([col], axis=1, inplace=True)
 
-        data = data.astype(bool)
-        
+        data = data.astype(int)        
+        if protective:
+            data[target] = ~data[target]
+        data = reorder_cols(data)
         result_folder = os.path.join(self.out_folder, 'association_rule_learning')
         if not os.path.exists(result_folder):
             os.makedirs(result_folder)
-            
-        if protective:
-            data[target] = ~data[target]
+        data.to_csv(os.path.join(result_folder, 'AprioriData.csv'), index = False)
+        csv_path = os.path.join(result_folder, out_file.split('.')[0] + '.csv')
 
-        # Generate association rules using mlxtend
-        if protective:
-            rules = apriori(data, min_support=min_support, use_colnames=True)
-            rules = association_rules(rules, metric="lift", min_threshold=min_lift)
+        command = [
+            "Rscript",   
+            os.path.join(self.r_dir, 'Association_Rules.R'),
+            result_folder, 
+            str(min_support), 
+            str(min_confidence), 
+            str(max_items), 
+            str(min_items), 
+            target, 
+            str(min_lift),
+            csv_path
+        ]
+        
+        process = subprocess.run(command, capture_output = True, text = True)
+
+        if process.returncode == 0:
+            print("R script executed successfully.")
+            print("Output:")
+            print(process.stdout)
         else:
-            rules = apriori(data, min_support=min_support, use_colnames=True)
-            rules = association_rules(rules, metric="lift", min_threshold=min_lift)
+            print("Error occurred while running the R script.")
+            print("Errors:")
+            print(process.stdout)
+            print(process.stderr)
+            raise Exception('za')
+
+        os.remove(os.path.join(result_folder, 'AprioriData.csv'))
+        if os.path.exists(csv_path):
+            ARLRules = pd.read_csv(csv_path)
+            pvals = ARLRules['pValue']
+            pvals = fdr_correction(pvals, alpha=0.05, method='indep')
+            ARLRules['adj pVals'] = pvals[1]
+        else:
+            print('No rules meeting minimum requirements were found')
+            print('Process Terminated')
+            return
+
+        vars = ARLRules['LHS'].tolist()
+        features, newF, rows, pvals = list(), list(), list(), list()
+        oddsRatios = pd.DataFrame(columns=['LHS-RHS', 'Odds Ratio', 'Confidence Interval', 'pValue', 'adjusted pVal'])
+        for var in vars:
+            newF.append(var)
+            features.append(var.replace('{', '').replace('}', '').split(','))
+
+        shared_data = SharedPandasDataFrame(data)
+
+        args = [(features[i], newF[i], shared_data) for i in range(len(features))]
+
+        def arl_stats_wrapper(cols, newFeature, shared_data_pointer):
+            dataC = shared_data_pointer.read()[cols]
+            dataC[newFeature] = dataC[dataC.columns[:]].apply(lambda x: ','.join(x.astype(str)),axis=1)
+            dataC = dataC[[newFeature]]
+            dataC[target] = shared_data_pointer.read()[target]
+            toDrop = []
+            for index, r in dataC.iterrows():                
+                fValue = set(r[newFeature].split(','))
+                if (len(fValue) > 1):
+                    toDrop.append(index)
+            dataC.drop(toDrop, inplace = True)
+            dataTrue = dataC[dataC[target] == 1].drop([target], axis =1).value_counts().tolist()
+            dataFalse = dataC[dataC[target] == 0].drop([target], axis = 1).value_counts().tolist()
+            if len(dataTrue) == 1:
+                dataTrue.append(0)
+            if len(dataFalse) == 1:
+                dataFalse.append(0)
+            dataTrue.reverse(); dataFalse.reverse()
             
-        rules = rules[rules['consequents'].astype(str).str.contains(target)]
-        # Filter rules based on length
-        rules = rules[(rules['antecedents'].apply(lambda x: len(x)) >= min_items) &
-                    (rules['antecedents'].apply(lambda x: len(x)) <= max_items)]
+            table = np.array([dataTrue, dataFalse])
+            print(table)
+            res = statsmodels.stats.contingency_tables.Table2x2(table, shift_zeros = True)
 
-        rules = rules[rules["consequents"].astype(str).str.contains(target)]
-        rules["antecedents"] = rules["antecedents"].apply(lambda x: ', '.join(list(x))).astype("unicode")
-        rules["consequents"] = rules["consequents"].apply(lambda x: ', '.join(list(x))).astype("unicode")
+            return [str(newFeature)+'-'+str(target), res.oddsratio, res.oddsratio_confint(), res.oddsratio_pvalue()]
 
-        # Sort rules by lift
-        rules = rules.sort_values(by='lift', ascending=False)
+        with Pool() as pool:
+            rows = pool.starmap(arl_stats_wrapper, args)
 
-        if rules.empty:
-            print('No association rules found.')
+        shared_data.unlink()
+        pvals = [row[-1] for row in rows]           
+        pvals = fdr_correction(pvals, alpha=0.05, method='indep')
+        for i in range(len(pvals[1])):
+            rows[i].append(pvals[1][i])
+            oddsRatios.loc[len(oddsRatios.index)] = rows[i]
+                      
+        Association = open(os.path.join(result_folder, out_file), 'w')
+        Association.write('\n\n----------------------------------------------------------------------------------------\n\n')
+        Association.write('\n\nOdds Ratio analysis for Association Rule Learning: \n----------------------------------------------------------------------------------------\n\n')
+        for i in range(len(oddsRatios)):
+            two_var = oddsRatios.iloc[i, :]
+            two_var = two_var.to_frame()
+            variables = str(two_var.iloc[0,0]).split('-')
+            two_var = two_var.iloc[1: , :]
+            Association.write('The odds ratio, p-Value, and confidence interval between ' + variables[0]+' and ' + variables[1] + ' are: \n\n')
+            toWrite = two_var.to_string(header = False, index = True)
+            Association.write(toWrite+'\n')
+            Association.write('----------------------------------------------------------------------------------------\n\n')
 
-        rules.to_csv(os.path.join(self.out_folder, 'association_rule_learning', 'arl_results{}.csv'.format('_protective' if protective else '')))
-    
+        Association.close()
+        
     def multivariate_linear_regression(self, out_file = 'mvlin.csv'):
         '''
         Runs multivariate regression on continuous, OHC data for given target variable.

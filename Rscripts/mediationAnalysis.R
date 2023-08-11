@@ -1,37 +1,50 @@
-#install.packages("mediation")
-#setwd("C:/Users/colev/OneDrive/Desktop/ukbb_analyzer")
+if (!requireNamespace("mediation", quietly = TRUE)) {
+  install.packages("mediation", repos = 'http://cran.us.r-project.org')
+}
+if (!requireNamespace("dplyr", quietly = TRUE)) {
+  install.packages("dplyr", repos = 'http://cran.us.r-project.org')
+}
+# if (!requireNamespace("mmabig", quietly = TRUE)) {
+#   install.packages("mmabig", repos = 'http://cran.us.r-project.org')
+# }
+
 library(mediation)
-library("dplyr")
-library("mmabig")
+library(dplyr)
+# library(mmabig)
 
-args = commandArgs(trailingOnly = TRUE)
+args <- commandArgs(trailingOnly = TRUE)
+path <- args[1]
+treatment <- args[2]
+mediator <- args[3]
+mediator_type <- args[4]
+outcome_var <- args[5]
+outcome_type <- args[6]
+sims <- strtoi(args[7])
 
-df=read.csv(paste("Data/mediationData.csv"),row.names=1,header=TRUE)
+df <- read.csv(path ,row.names = 1, header = TRUE)
 
-treatment=args[1]
-mediator=args[2]
-outcome_var=args[3]
-covariates=args[4]
+# mediatior model is always assumed to be binomial
+if (mediator_type == "bin") {
+    fit.mediator <- glm(as.formula(paste(mediator, "~", treatment)), data = df, family = binomial("probit"))
+} else if (mediator_type == "cont") {
+    fit.mediator <- lm(as.formula(paste(mediator, "~", treatment)), data = df)
+} else {
+    stop("Invalid mediator_type specified. Use 'bin' or 'cont'.")
+}
+if (outcome_type == "bin") {
+    fit.dv <- glm(as.formula(paste(outcome_var, "~", mediator, "+", treatment)),
+                data = df, family = binomial("probit"))
+} else if (outcome_type == "cont") {
+    fit.dv <- lm(as.formula(paste(outcome_var, "~", mediator, "+", treatment)),
+               data = df)
+} else {
+    stop("Invalid outcome_type specified. Use 'bin' or 'cont'.")
+}
+med.out <- mediate(fit.mediator, fit.dv, treat = treatment, mediator = mediator, robustSE = TRUE, sims = sims)
 
-
-#covariates=unlist(strsplit(covariates,'\\+'))
-#drops=c(treatment,outcome_var)
-#d=df[ , !names(df) %in% drops]
-#treatment=df[args[1]]
-#outcome_var=df[args[3]]
-#data.e1.2<-data.org.big(x=d,y=outcome_var,mediator=1:ncol(d),pred=treatment,testtype=1)
-#summary(data.e1.2,only=TRUE)
-
-#for (y in colnames(df)){
-#    print(y)
-#}
-
-
-fit.mediator=lm(as.formula(paste(mediator,"~",treatment,"+",covariates)),data=df)#family = binomial("probit")
- #fit.mediator=glm(Chronotype_3~rs10838524_1.rs2287161_2,data=df,family = binomial("probit"))
-fit.dv=glm(as.formula(paste(outcome_var,"~",mediator,"+",treatment,"+",covariates)),data=df,family = binomial("probit"))
- #fit.dv=glm(GAD7_1~Chronotype_3+rs10838524_1.rs2287161_2,data=df,family = binomial("probit"))
-med.out=mediate(fit.mediator,fit.dv,treat=treatment,mediator=mediator,robustSE = TRUE, sims = 100)
-sink("mediation.txt")
+output_file <- paste(treatment, mediator, outcome_var, "mediation.txt", sep = "_")
+output_dir <- dirname(path)
+output_path <- file.path(output_dir, output_file)
+sink(output_path)
 summary(med.out)
 sink()
