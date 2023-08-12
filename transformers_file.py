@@ -26,12 +26,15 @@ sa = Stat_Analyzer(
 # )
 
 sa.mediation_analysis(
-    'cont',
-    'Age_n',
+    'bin',
+    'Overall_Health_Score_3',
     ['rs141716729'],
-    mediator_type = 'cont',
-    sims = 50
+    mediator_type = 'bin',
+    sims = 50,
+    covariates = ['Chronotype_1', 'Overall_Health_Score_4', 'Sleeplessness/Insomnia_1']
 )
+
+# sa.association_rule_learning(drop_clinical = True)
 
 # train_data = pd.read_csv('/home/mminbay/summer_research/depression_study/{}_train_final_features.csv'.format(sex), index_col = 0).drop(columns = ['PHQ9'])
 # train_data['Chronotype_bin'] = (train_data['Chronotype'] > 2).astype(int)

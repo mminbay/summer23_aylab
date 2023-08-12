@@ -310,7 +310,8 @@ class Stat_Analyzer():
         med,
         indep,
         mediator_type = 'bin',
-        sims = 100
+        sims = 100,
+        covariates = None
     ):
         '''
         Conducts mediation analysis on continous, OHC data for given dependent variable, mediator, and independent variable(s).
@@ -322,6 +323,7 @@ class Stat_Analyzer():
             indep (str or list(str)) -- (list of) column identifier of independent variable(s)
             mediatior_type ('bin', 'cont') -- whether the mediator variable is binary or continuous. 
             sims (int) -- how many simulations to run for each mediation analysis
+            covariates (list(str)) -- covariates to include in mediation analysis
         '''
         if dep == 'bin':
             target = self.bin_outcome
@@ -332,11 +334,21 @@ class Stat_Analyzer():
         else:
             raise Exception('Argument \'dep\' for mediation analysis must be either \'bin\' or \'cont\'')
 
+        if covariates is not None:
+            for i in range(len(covariates)):
+                covariates[i] = covariates[i].replace(' ', '_').replace('.', '_').replace('/', '_')
+                if '+' in covariates[i]:
+                    raise Exception('Forbidden character \'+\' in column identifier for covariate {}'.format(covariates[i]))
+            covariates = '+'.join(covariates)
+        else:
+            covariates = 'DNE'
+            
         data.columns = data.columns.str.replace(' ', '_', regex = False)
         data.columns = data.columns.str.replace('.', '_', regex = False)
+        data.columns = data.columns.str.replace('/', '_', regex = False)
 
-        med = med.replace('.', '_').replace(' ', '_')
-        target = target.replace('.', '_').replace(' ', '_')
+        med = med.replace('.', '_').replace(' ', '_').replace('/', '_')
+        target = target.replace('.', '_').replace(' ', '_').replace('/', '_')
 
         result_folder = os.path.join(self.out_folder, 'mediation_analysis')
 
@@ -361,7 +373,8 @@ class Stat_Analyzer():
                 mediator_type,
                 target, 
                 dep,
-                str(sims)
+                str(sims),
+                covariates
             ]
             
             process = subprocess.run(command, capture_output = True, text = True)
@@ -389,6 +402,7 @@ class Stat_Analyzer():
         min_lift = 2, 
         protective = False,
         drop_pairs = True,
+        drop_clinical = False,
         out_file = 'arl.txt'
     ):
         '''
@@ -402,11 +416,14 @@ class Stat_Analyzer():
             min_items (int) -- minimum number of item in the rules including both sides
             max_items (int) -- maximum number of item in the rules including both sides
             min_lift (float) -- minimum value for lift for the rule to be considered
-            protective (bool) -- if True, the target values will be flipped to find protective features
+            protective (bool) -- if True, the target value will be flipped to find protective features
             drop_pairs (bool) -- if True, columns containing 'pair:' will be dropped
+            drop_clinical (bool) -- if True, columns that are not SNPs or pairs will be dropped
             out_file (str) -- name of output file. requires .txt extension
         '''
         data = self.bin_ohc_wbase.copy(deep = True)
+        print(data.columns)
+        target = self.bin_outcome
         # the following column modifications are hot garbage, please make them more efficient
         new_columns = []
         for column in data.columns:
@@ -415,12 +432,14 @@ class Stat_Analyzer():
             else:
                 new_columns.append(column)        
         data.columns = new_columns
-        data.drop(columns = data.filter(regex = '^pair:').columns, inplace = True)
+        if drop_pairs:
+            data.drop(columns = data.filter(regex = '^pair:').columns, inplace = True)
+        if drop_clinical:
+            data = data.filter(regex = '^(rs|SNP|pair|' + target + ')')
         data.columns = data.columns.str.replace(' ', '_', regex = False)
         data.columns = data.columns.str.replace('/', '_', regex = False)
         data.columns = data.columns.str.replace('.', '_', regex = False)
         data.columns = data.columns.str.replace(':', '_', regex = False)
-        target = self.bin_outcome
 
         data.drop(columns = continuous, inplace = True)
         # remove all columns with more than 2 unique values -- this ensures all features are binarized
