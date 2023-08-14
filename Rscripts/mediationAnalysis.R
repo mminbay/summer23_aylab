@@ -21,7 +21,6 @@ outcome_var <- args[5]
 outcome_type <- args[6]
 sims <- strtoi(args[7])
 covariates <- args[8]
-print(covariates)
 
 df <- read.csv(path ,row.names = 1, header = TRUE)
 
@@ -29,17 +28,21 @@ df <- read.csv(path ,row.names = 1, header = TRUE)
 if (mediator_type == "bin") {
     if (covariates == "DNE") {
         print("No covariates!")
+        print(paste(mediator, "~", treatment))
         fit.mediator <- glm(as.formula(paste(mediator, "~", treatment)), data = df, family = binomial("probit"))
     } else {
         print("Using covariates!")
+        print(paste(mediator, "~", treatment, "+", covariates))
         fit.mediator <- glm(as.formula(paste(mediator, "~", treatment, "+", covariates)), data = df, family = binomial("probit"))
     }
 } else if (mediator_type == "cont") {
     if (covariates == "DNE") {
         print("No covariates!")
+        print(paste(mediator, "~", treatment))
         fit.mediator <- lm(as.formula(paste(mediator, "~", treatment)), data = df)
     } else {
         print("Using covariates!")
+        print(paste(mediator, "~", treatment, "+", covariates))
         fit.mediator <- lm(as.formula(paste(mediator, "~", treatment, "+", covariates)), data = df)
     }
 } else {
@@ -48,20 +51,24 @@ if (mediator_type == "bin") {
 if (outcome_type == "bin") {
     if (covariates == "DNE") {
         print("No covariates!")
+        print(paste(outcome_var, "~", mediator, "+", treatment))
         fit.dv <- glm(as.formula(paste(outcome_var, "~", mediator, "+", treatment)),
                 data = df, family = binomial("probit"))
     } else {
         print("Using covariates!")
+        print(paste(outcome_var, "~", mediator, "+", treatment, "+", covariates))
         fit.dv <- glm(as.formula(paste(outcome_var, "~", mediator, "+", treatment, "+", covariates)),
                 data = df, family = binomial("probit"))
     }
 } else if (outcome_type == "cont") {
     if (covariates == "DNE") {
         print("No covariates!")
+        print(paste(outcome_var, "~", mediator, "+", treatment))
         fit.dv <- lm(as.formula(paste(outcome_var, "~", mediator, "+", treatment)),
                data = df)
     } else {
         print("Using covariates!")
+        print(paste(outcome_var, "~", mediator, "+", treatment, "+", covariates))
         fit.dv <- lm(as.formula(paste(outcome_var, "~", mediator, "+", treatment, "+", covariates)),
                data = df)
     }

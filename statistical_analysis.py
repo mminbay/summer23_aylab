@@ -32,13 +32,12 @@ from statsmodels.genmod.generalized_linear_model import GLM, SET_USE_BIC_LLF
 from statsmodels.genmod import families
 from statsmodels.stats.multicomp import MultiComparison
 from statsmodels.stats.outliers_influence import variance_inflation_factor
-from statsmodels.stats.mediation import Mediation
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from statsmodels.stats.multitest import multipletests
 from utils import reorder_cols
 from utilities import relabel  # hardcoded. relabel functional will be updated when anova needed
 import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category = DeprecationWarning)
 
 
 '''
@@ -68,13 +67,30 @@ class Stat_Analyzer():
             normalize_columns (list(str)) -- column identifiers to normalize
             r_dir (str) -- path to directory containing Rscripts for some statistical analyses    
         '''
+        # normalize provided columns
         for col in normalize_columns:
             min_val = data[col].min()
             max_val = data[col].max()
             data[col] = (data[col] - min_val) / (max_val - min_val)
 
+        # prepare columns for one-hot encoding
         for col in ohe_columns:
             data[col] = data[col].astype(int)
+
+        # modify column names for R compatibility
+        new_columns = []
+        for column in data.columns:
+            if data[column].nunique() <= 1:
+                warnings.warn('Dataframe contains column \'{}\' which has a single unique value. Removing this column.'.format(column), UserWarning)
+                data.drop(columns = [column], inplace = True)
+                continue
+            if column[0].isdigit():
+                warnings.warn('Dataframe contains column labels starting with a number and underscore. Prepending \'SNP\' for R compatibility.', UserWarning)
+                new_columns.append('SNP' + column)
+            else:
+                new_columns.append(column)        
+        data.columns = new_columns
+        data.columns = data.columns.str.replace('[ ./:]', '_', regex = True)
         
         bin = data.drop(columns = [cont_outcome])
         cont = data.drop(columns = [bin_outcome])
@@ -503,7 +519,7 @@ class Stat_Analyzer():
             indep (str or list(str)) -- (list of) column identifier of independent variable(s)
             mediatior_type ('bin', 'cont') -- whether the mediator variable is binary or continuous. 
             sims (int) -- how many simulations to run for each mediation analysis
-            covariates (list(str)) -- covariates to include in mediation analysis
+            covariates (list(str)) -- covariates to include in mediation analysis. pass 'ALL' to include every variable other than target, med, and indep
         '''
         if dep == 'bin':
             target = self.bin_outcome
@@ -514,21 +530,22 @@ class Stat_Analyzer():
         else:
             raise Exception('Argument \'dep\' for mediation analysis must be either \'bin\' or \'cont\'')
 
-        if covariates is not None:
+        data.drop(columns = ['ID_1'], inplace = True)
+
+        if covariates == 'ALL':
+            covariates = data.drop(columns = [med, target]).columns.tolist()
+        elif covariates is not None:
             for i in range(len(covariates)):
-                covariates[i] = covariates[i].replace(' ', '_').replace('.', '_').replace('/', '_')
+                covariates[i] = covariates[i].replace(' ', '_').replace('.', '_').replace('/', '_').replace(':', '_')
                 if '+' in covariates[i]:
                     raise Exception('Forbidden character \'+\' in column identifier for covariate {}'.format(covariates[i]))
-            covariates = '+'.join(covariates)
+            covariates = data.filter(regex = '|'.join(covariates)).columns.tolist() # in case the covariate is OHE
         else:
             covariates = 'DNE'
-            
-        data.columns = data.columns.str.replace(' ', '_', regex = False)
-        data.columns = data.columns.str.replace('.', '_', regex = False)
-        data.columns = data.columns.str.replace('/', '_', regex = False)
+            covariates_str = 'DNE'
         
-        med = med.replace('.', '_').replace(' ', '_').replace('/', '_')
-        target = target.replace('.', '_').replace(' ', '_').replace('/', '_')
+        med = med.replace('.', '_').replace(' ', '_').replace('/', '_').replace(':', '_')
+        target = target.replace('.', '_').replace(' ', '_').replace('/', '_').replace(':', '_')
 
         result_folder = os.path.join(self.out_folder, 'mediation_analysis')
 
@@ -543,7 +560,12 @@ class Stat_Analyzer():
             indep = t
         
         for i in range(len(indep)):
-            var = indep[i].replace('.', '_').replace(' ', '_').replace('/', '_')
+            var = indep[i].replace('.', '_').replace(' ', '_').replace('/', '_').replace(':', '_')
+            if covariates != 'DNE':
+                if var in covariates:
+                    covariates.remove(var)
+                covariates_str = '+'.join(covariates)
+            print(var, covariates_str)
             command = [
                 "Rscript",
                 os.path.join(self.r_dir, 'mediationAnalysis.R'),
@@ -554,8 +576,10 @@ class Stat_Analyzer():
                 target, 
                 dep,
                 str(sims),
-                covariates
+                covariates_str
             ]
+
+            covariates.append(var)
             
             process = subprocess.run(command, capture_output = True, text = True)
             
@@ -604,21 +628,11 @@ class Stat_Analyzer():
         print(data.columns)
         target = self.bin_outcome
         # the following column modifications are hot garbage, please make them more efficient
-        new_columns = []
-        for column in data.columns:
-            if column[0].isdigit():
-                new_columns.append('SNP:' + column)
-            else:
-                new_columns.append(column)        
-        data.columns = new_columns
+        
         if drop_pairs:
             data.drop(columns = data.filter(regex = '^pair:').columns, inplace = True)
         if drop_clinical:
             data = data.filter(regex = '^(rs|SNP|pair|' + target + ')')
-        data.columns = data.columns.str.replace(' ', '_', regex = False)
-        data.columns = data.columns.str.replace('/', '_', regex = False)
-        data.columns = data.columns.str.replace('.', '_', regex = False)
-        data.columns = data.columns.str.replace(':', '_', regex = False)
 
         data.drop(columns = continuous, inplace = True)
         # remove all columns with more than 2 unique values -- this ensures all features are binarized

@@ -6,6 +6,8 @@ import multiprocessing as mp
 from multiprocessing import pool
 import subprocess
 
+
+
 def find_sig_snp_interactions(csv_file, output_file = None):
     """
     Find significant positions in a symmetric matrix CSV file.

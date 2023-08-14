@@ -5,19 +5,16 @@ from xgboost import XGBClassifier
 import matplotlib.pyplot as plt
 from statistical_analysis import Stat_Analyzer
 
-sex = 'overall'
-target_column = 'PHQ9_binary'
+excel_file_path = '/home/mminbay/summer_research/med_an/depression_study_regressions_sig_factors.xlsx'
+sexes = ['MALE', 'FEMALE', 'OVERALL']
+regs = ['LIN', 'LOG']
 
-data = pd.read_csv('/home/mminbay/jonathan/overall_final_features_2g.csv', index_col = 0)
-
-sa = Stat_Analyzer(
-    data,
-    'PHQ9_binary',
-    'PHQ9',
-    '/home/mminbay/jonathan/',
-    ohe_columns = ['Chronotype', 'Sleeplessness/Insomnia', 'Overall_Health_Score'],
-    r_dir = '/home/mminbay/summer_research/summer23_aylab/Rscripts/',
-)
+for sex in sexes:
+    for reg in regs:
+        sheet_name = 'SNPS {} {}'.format(sex, reg)
+        data = pd.read_excel(excel_file_path, sheet_name=sheet_name)
+        csv_file_path = '/home/mminbay/summer_research/med_an/snps_{}_{}.csv'.format(sex.lower(), reg.lower())  
+        data.to_csv(csv_file_path, index = False)
 
 # sa.scheirer_ray_hare(
 #     '/home/mminbay/jonathan/overall_pair_snp_gene_data.csv',
@@ -25,14 +22,14 @@ sa = Stat_Analyzer(
 #     'Sex',
 # )
 
-sa.mediation_analysis(
-    'bin',
-    'Overall_Health_Score_3',
-    ['rs141716729'],
-    mediator_type = 'bin',
-    sims = 50,
-    covariates = ['Chronotype_1', 'Overall_Health_Score_4', 'Sleeplessness/Insomnia_1']
-)
+# sa.mediation_analysis(
+#     'bin',
+#     'Overall_Health_Score_3',
+#     ['rs141716729'],
+#     mediator_type = 'bin',
+#     sims = 50,
+#     covariates = ['Chronotype_1', 'Overall_Health_Score_4', 'Sleeplessness/Insomnia_1']
+# )
 
 # sa.association_rule_learning(drop_clinical = True)
 
