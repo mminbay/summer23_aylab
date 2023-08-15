@@ -5,33 +5,48 @@ from xgboost import XGBClassifier
 import matplotlib.pyplot as plt
 from statistical_analysis import Stat_Analyzer
 
-excel_file_path = '/home/mminbay/summer_research/med_an/depression_study_regressions_sig_factors.xlsx'
-sexes = ['MALE', 'FEMALE', 'OVERALL']
-regs = ['LIN', 'LOG']
+# excel_file_path = '/home/mminbay/summer_research/med_an/depression_study_regressions_sig_factors.xlsx'
+# sexes = ['MALE', 'FEMALE', 'OVERALL']
+# regs = ['LIN', 'LOG']
+
+# for sex in sexes:
+#     for reg in regs:
+#         sheet_name = 'SNPS {} {}'.format(sex, reg)
+#         data = pd.read_excel(excel_file_path, sheet_name=sheet_name)
+#         csv_file_path = '/home/mminbay/summer_research/med_an/snps_{}_{}.csv'.format(sex.lower(), reg.lower())  
+#         data.to_csv(csv_file_path, index = False)
+
+sexes = ['male', 'female', 'overall']
+regs = ['log', 'lin']
+snps_format = '/home/mminbay/summer_research/final_runs/snps_{}_{}.csv'
+data_format = '/home/mminbay/summer_research/final_runs/{}_final_features_2g.csv'
 
 for sex in sexes:
-    for reg in regs:
-        sheet_name = 'SNPS {} {}'.format(sex, reg)
-        data = pd.read_excel(excel_file_path, sheet_name=sheet_name)
-        csv_file_path = '/home/mminbay/summer_research/med_an/snps_{}_{}.csv'.format(sex.lower(), reg.lower())  
-        data.to_csv(csv_file_path, index = False)
+    data = pd.read_csv(data_format.format(sex), index_col = 0)
+    factors_lin = pd.read_csv(snps_format.format(sex, 'lin'))
+    factors_lin.columns = factors_lin.columns.str.strip()
+    
+    factors_log = pd.read_csv(snps_format.format(sex, 'log'))
+    factors_log.columns = factors_log.columns.str.strip()
+    
+    factors = pd.concat([factors_lin, factors_log])
+    factors['variable'] = factors['variable'].str.strip()
+    factors.drop_duplicates(subset = 'variable')
+    factors_list = factors['variable'].tolist()
+    factors_list.extend(['Sex', 'Age_n', 'TSDI_n', 'Sleeplessness/Insomnia', 'Chronotype', 'Overall_Health_Score', 'ID_1', 'PHQ9_binary', 'PHQ9'])
 
-# sa.scheirer_ray_hare(
-#     '/home/mminbay/jonathan/overall_pair_snp_gene_data.csv',
-#     'pair',
-#     'Sex',
-# )
+    data_final = data[factors_list].copy(deep = True)
 
-# sa.mediation_analysis(
-#     'bin',
-#     'Overall_Health_Score_3',
-#     ['rs141716729'],
-#     mediator_type = 'bin',
-#     sims = 50,
-#     covariates = ['Chronotype_1', 'Overall_Health_Score_4', 'Sleeplessness/Insomnia_1']
-# )
+    sa = Stat_Analyzer(
+        data_final,
+        'PHQ9_binary',
+        'PHQ9',
+        '/home/mminbay/summer_research/final_runs/{}_clinical_NEW'.format(sex),
+        ohe_columns = ['Overall_Health_Score'],
+        r_dir = '/home/mminbay/summer_research/summer23_aylab/Rscripts'
+    )
 
-# sa.association_rule_learning(drop_clinical = True)
+    sa.association_rule_learning()
 
 # train_data = pd.read_csv('/home/mminbay/summer_research/depression_study/{}_train_final_features.csv'.format(sex), index_col = 0).drop(columns = ['PHQ9'])
 # train_data['Chronotype_bin'] = (train_data['Chronotype'] > 2).astype(int)

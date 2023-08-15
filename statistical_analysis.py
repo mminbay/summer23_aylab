@@ -620,7 +620,7 @@ class Stat_Analyzer():
             max_items (int) -- maximum number of item in the rules including both sides
             min_lift (float) -- minimum value for lift for the rule to be considered
             protective (bool) -- if True, the target value will be flipped to find protective features
-            drop_pairs (bool) -- if True, columns containing 'pair:' will be dropped
+            drop_pairs (bool) -- if True, columns containing 'pair' will be dropped
             drop_clinical (bool) -- if True, columns that are not SNPs or pairs will be dropped
             out_file (str) -- name of output file. requires .txt extension
         '''
@@ -630,7 +630,7 @@ class Stat_Analyzer():
         # the following column modifications are hot garbage, please make them more efficient
         
         if drop_pairs:
-            data.drop(columns = data.filter(regex = '^pair:').columns, inplace = True)
+            data.drop(columns = data.filter(regex = '^pair').columns, inplace = True)
         if drop_clinical:
             data = data.filter(regex = '^(rs|SNP|pair|' + target + ')')
 
