@@ -67,7 +67,7 @@ def main():
     dl.load_chroms_and_intervals(INTERVALS_PATH)
     # This step takes VERY LONG if run sequentially. You might want to split it up to different jobs with the 'keep' and 'ignore' parameters
     dl.get_imputed_from_intervals_for_ids(
-        pd.read_csv(DEPRESSION_DATA_PATH, index_col = 0),
+        DEPRESSION_DATA_PATH,
         extra = 6000,
         table_name = 'c{}_depression_6000extra.csv',
         export = True,

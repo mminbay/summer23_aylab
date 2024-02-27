@@ -40,7 +40,7 @@ def write_to_file(lines, name):
 DATA_DIR = '/home/mminbay/summer_research/summer23_aylab/data/snps/'
 
 def main():
-    write_to_file(sort_intervals('intervals_unsorted.txt'), 'all_intervals.txt')
+    write_to_file(sort_intervals('additional_depression_intervals.txt'), 'additional_depression_intervals.txt')
 
 if __name__ == '__main__':
     main()

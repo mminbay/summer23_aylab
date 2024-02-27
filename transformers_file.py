@@ -22,6 +22,7 @@ snps_format = '/home/mminbay/summer_research/final_runs/snps_{}_{}.csv'
 data_format = '/home/mminbay/summer_research/final_runs/{}_final_features_2g.csv'
 
 for sex in sexes:
+    print(sex)
     data = pd.read_csv(data_format.format(sex), index_col = 0)
     factors_lin = pd.read_csv(snps_format.format(sex, 'lin'))
     factors_lin.columns = factors_lin.columns.str.strip()
@@ -31,22 +32,35 @@ for sex in sexes:
     
     factors = pd.concat([factors_lin, factors_log])
     factors['variable'] = factors['variable'].str.strip()
-    factors.drop_duplicates(subset = 'variable')
-    factors_list = factors['variable'].tolist()
-    factors_list.extend(['Sex', 'Age_n', 'TSDI_n', 'Sleeplessness/Insomnia', 'Chronotype', 'Overall_Health_Score', 'ID_1', 'PHQ9_binary', 'PHQ9'])
-
+    factors.drop_duplicates(subset = 'variable', inplace = True)
+    factors_list = []
+    for factor in factors['variable'].tolist():
+        if 'pair' in factor:
+            factors_list.extend(factor[5:].split(':'))
+        else:
+            factors_list.append(factor)
+    # factors_list.extend(['Age_n', 'TSDI_n', 'Sleeplessness/Insomnia', 'Chronotype', 'Overall_Health_Score', 'ID_1', 'PHQ9_binary', 'PHQ9'])
+    factors_list = list(set(factors_list))
+    factors_list.extend(['ID_1', 'PHQ9_binary', 'PHQ9'])
     data_final = data[factors_list].copy(deep = True)
 
     sa = Stat_Analyzer(
         data_final,
         'PHQ9_binary',
         'PHQ9',
-        '/home/mminbay/summer_research/final_runs/{}_clinical_NEW'.format(sex),
-        ohe_columns = ['Overall_Health_Score'],
+        '/home/mminbay/summer_research/final_runs/{}_graph_test'.format(sex),
+        # ohe_columns = ['Overall_Health_Score'],
         r_dir = '/home/mminbay/summer_research/summer23_aylab/Rscripts'
     )
 
-    sa.association_rule_learning()
+    support = 0.00001
+    support_str = "0.0001"
+
+    sa.association_rule_learning(
+        min_support = support,
+        out_file = '{}_{}_noclinical_pairs.txt'.format(sex, support_str),
+        calc_pvals = False
+    )
 
 # train_data = pd.read_csv('/home/mminbay/summer_research/depression_study/{}_train_final_features.csv'.format(sex), index_col = 0).drop(columns = ['PHQ9'])
 # train_data['Chronotype_bin'] = (train_data['Chronotype'] > 2).astype(int)

@@ -61,7 +61,6 @@ def fs_wrapper(args):
         result['score_2'] = u2
         result['p_val'] = p_val
     elif args[3] == 'ttest':
-        print('yee')
         zero_vector = target[np.where(data[args[0]] == 0)]
         one_vector = target[np.where(data[args[0]] == 1)]
         if len(zero_vector) == 0 or len(one_vector) == 0:
@@ -122,7 +121,7 @@ def chisquare(data, target, out_name, kwargs):
     df["chi2_score"] = [result[0]['score'] for result in results]
     df["p_val"] = [result[0]['p_val'] for result in results]
     if correction == 'fdr':
-        df['adjusted_p_val'] = fdr_correction(df['p_val'], alpha = 0.05, method= "indep")[1]
+        df['adjusted_p_val'] = fdrcorrection(df['p_val'], alpha = 0.05, method= "indep")[1]
     df['frequency'] = [result[2] for result in results]
     df.to_csv(out_name)
 
@@ -261,7 +260,7 @@ def ttest(data, target, out_name, kwargs):
     df['ttest_score'] = [abs(result[0]['score']) for result in results]
     df["p_val"] = [result[0]['p_val'] for result in results]
     if correction == 'fdr':
-        df['adjusted_p_val'] = fdr_correction(df['p_val'], alpha = 0.05, method= "indep")[1]
+        df['adjusted_p_val'] = fdrcorrection(df['p_val'], alpha = 0.05, method= "indep")[1]
     df['frequency'] = [result[2] for result in results]
     df.to_csv(out_name)
 
@@ -283,11 +282,9 @@ def mrmr(data, target, out_name, kwargs):
     data_arr = only_snp_data.to_numpy()
     
     if 'n_selected_features' in kwargs.keys():
-        logging.info('Yay this did print!')
         n_selected_features = kwargs['n_selected_features']
         F, J_CMI, MIfy= LCSI.lcsi(data_arr, target_arr, gamma=0, function_name='MRMR', n_selected_features=n_selected_features)
-    else:   
-        logging.info('This shouldn\'t print')
+    else:
         F, J_CMI, MIfy = LCSI.lcsi(data_arr, target_arr, gamma=0, function_name='MRMR')
 
     logging.info('MRMR --- Chosen indices are: {}'.format(F))
@@ -319,11 +316,9 @@ def jmi(data, target, out_name, kwargs):
     data_arr = only_snp_data.to_numpy()
     
     if 'n_selected_features' in kwargs.keys():
-        logging.info('Yay this did print!')
         n_selected_features = kwargs['n_selected_features']
         F, J_CMI, MIfy = LCSI.lcsi(data_arr, target_arr, function_name='JMI', n_selected_features=n_selected_features)
     else:
-        logging.info('This shouldn\'t print!')
         F, J_CMI, MIfy = LCSI.lcsi(data_arr, target_arr, function_name='JMI')
 
     logging.info('JMI --- Chosen indices are: {}'.format(F))
@@ -559,8 +554,8 @@ class FeatureSelector():
 
         Arguments:
             freq_threshold (int) -- if either the group with the snp or without the snp is smaller than this number, the snp will be ignored
-            n_bootstraps (int) -- number of bootstraps. ignored if bootstraps is not None. pass None for same size as original sample size
-            n_samples (int) -- number of samples in each bootstrap. ignored if bootstraps is not None.
+            n_bootstraps (int) -- number of bootstraps. ignored if bootstraps is not None. 
+            n_samples (int) -- number of samples in each bootstrap. ignored if bootstraps is not None. pass None for same size as original sample size
             stratify_column (str) -- column label to use for feature selection and stratifying the bootstrap.
             selector_names (list(str)) -- list of function names that will be used to name subdirectories.
             selector_kwargs (list(dict(str: any))) -- list of dictionaries for kwargs to pass into selector functions

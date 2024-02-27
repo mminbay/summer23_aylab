@@ -34,8 +34,8 @@ from statsmodels.stats.multicomp import MultiComparison
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from statsmodels.stats.multitest import multipletests
-from utils import reorder_cols
-from utilities import relabel  # hardcoded. relabel functional will be updated when anova needed
+from utils import reorder_cols, split_pair
+# from utilities import relabel  # hardcoded. relabel functional will be updated when anova needed
 import warnings
 warnings.filterwarnings("ignore", category = DeprecationWarning)
 
@@ -46,7 +46,6 @@ An example usage can be found at the end of this file
 '''
 
 class Stat_Analyzer():
-    # TODO: implement!
     def __init__(
         self,
         data,
@@ -90,8 +89,20 @@ class Stat_Analyzer():
             else:
                 new_columns.append(column)        
         data.columns = new_columns
-        data.columns = data.columns.str.replace('[ ./:]', '_', regex = True)
-        
+        data.columns = data.columns.str.replace('[ ./:\-]', '_', regex = True)
+
+        # remove identical columns 
+        identical = []
+        for i in range(len(data.columns)):
+            for j in range(i + 1, len(data.columns)):
+                if (data[data.columns[i]] == data[data.columns[j]]).all():
+                    print('Columns {} and {} have identical values, dropping the latter for regression analyses.'.format(
+                        data.columns[i],
+                        data.columns[j]
+                    ))
+                    identical.append(data.columns[j])
+        data.drop(columns = identical, inplace = True)
+
         bin = data.drop(columns = [cont_outcome])
         cont = data.drop(columns = [bin_outcome])
         bin_ohc = pd.get_dummies(bin, columns = ohe_columns, drop_first = True)
@@ -118,27 +129,25 @@ class Stat_Analyzer():
 
     def scheirer_ray_hare(
         self,
-        snps_file_path,
-        curr_snp,
+        indep,
+        gene_mapping = None
         sex_column = 'Sex',
     ):
         '''
-        Runs SRH test. Docstring WIP
+        Runs SRH test for the provided independent variables.
 
         Arguments:
-            snps_file_path (str) --
-            curr_snp ('single', 'pair') --
-            sex_column (str) --
+            indep (str) -- column identifier of the independent variable.
+            gene_mapping (pandas DataFrame or str) -- a dataframe (or path to dataframe) that should have the columns 'variable' and 'Gene'. if not None, the corresponding gene name for the independent variable will be prepended to the output file name.
+            sex_column (str) -- column identifier of the second independent variable. this is usually the sex column.
         '''
         target = self.cont_outcome
-        if curr_snp not in ['single', 'pair']:
-            raise Exception('Argument \'curr_snp\' must be either \'single\' or \'pair\'')
         result_folder = os.path.join(self.out_folder, 'scheirer_ray_hare/')
         if not os.path.exists(result_folder):
             os.makedirs(result_folder)
 
         data = self.cont_ohc.copy(deep = True)
-        data = reorder_cols(data)
+        data = reorder_cols(data, cols = ['ID_1', self.cont_outcome])
         tmp_path = os.path.join(result_folder, 'srh_tmp.csv')
         data.to_csv(tmp_path, index = False)
 
@@ -507,19 +516,23 @@ class Stat_Analyzer():
         indep,
         mediator_type = 'bin',
         sims = 100,
-        covariates = None
+        covariates = None,
+        gene_mapping = None,
+        out_format = '{indep}_{med}_{dep}_mediation.txt'
     ):
         '''
         Conducts mediation analysis on continous, OHC data for given dependent variable, mediator, and independent variable(s).
         Saves results as a .csv file
 
         Arguments:
-            dep ('bin', 'cont') -- which outcome variable to use 
-            med (str) -- column identifier of mediator variable
-            indep (str or list(str)) -- (list of) column identifier of independent variable(s)
+            dep ('bin' or 'cont') -- which outcome variable to use.
+            med (str) -- column identifier of mediator variable.
+            indep (str or list(str)) -- (list of) column identifier of independent variable(s).
             mediatior_type ('bin', 'cont') -- whether the mediator variable is binary or continuous. 
-            sims (int) -- how many simulations to run for each mediation analysis
-            covariates (list(str)) -- covariates to include in mediation analysis. pass 'ALL' to include every variable other than target, med, and indep
+            sims (int) -- how many simulations to run for each mediation analysis.
+            covariates (list(str)) -- covariates to include in mediation analysis. pass 'ALL' to include every variable other than target, med, and indep.
+            gene_mapping (pandas DataFrame or str) -- a dataframe (or path to dataframe) that should have the columns 'variable' and 'Gene'. if not None, the corresponding gene name for the independent variable will be prepended to the output file name.
+            out_format (str) -- format of output file name. this should include the fields 'indep', 'med', and 'dep' for formatting (and 'gene') if gene_mapping is provided. requires .txt extension.
         '''
         if dep == 'bin':
             target = self.bin_outcome
@@ -530,22 +543,32 @@ class Stat_Analyzer():
         else:
             raise Exception('Argument \'dep\' for mediation analysis must be either \'bin\' or \'cont\'')
 
-        data.drop(columns = ['ID_1'], inplace = True)
+        use_mapping = False
+        if type(gene_mapping) == str:
+            gene_mapping = pd.read_csv(gene_mapping)
+        if isinstance(gene_mapping, pd.DataFrame):
+            use_mapping = True
+            gene_mapping['variable'] = gene_mapping['variable'].str.replace('[ ./:\-]', '_', regex = True)
+
+        if 'ID_1' in data.columns:
+            data.drop(columns = ['ID_1'], inplace = True)
 
         if covariates == 'ALL':
             covariates = data.drop(columns = [med, target]).columns.tolist()
         elif covariates is not None:
             for i in range(len(covariates)):
-                covariates[i] = covariates[i].replace(' ', '_').replace('.', '_').replace('/', '_').replace(':', '_')
-                if '+' in covariates[i]:
-                    raise Exception('Forbidden character \'+\' in column identifier for covariate {}'.format(covariates[i]))
+                covariates[i] = covariates[i].replace(' ', '_').replace('.', '_').replace('/', '_').replace(':', '_').replace('-', '_')
+                if '+' in covariates[i] or '-' in covariates[i]:
+                    raise Exception('Forbidden character in column identifier for covariate {}'.format(covariates[i]))
             covariates = data.filter(regex = '|'.join(covariates)).columns.tolist() # in case the covariate is OHE
         else:
             covariates = 'DNE'
             covariates_str = 'DNE'
         
-        med = med.replace('.', '_').replace(' ', '_').replace('/', '_').replace(':', '_')
-        target = target.replace('.', '_').replace(' ', '_').replace('/', '_').replace(':', '_')
+        med = med.replace('.', '_').replace(' ', '_').replace('/', '_').replace(':', '_').replace('-', '_')
+        if med[0].isdigit():
+            med = 'SNP' + med
+        target = target.replace('.', '_').replace(' ', '_').replace('/', '_').replace(':', '_').replace('-', '_')
 
         result_folder = os.path.join(self.out_folder, 'mediation_analysis')
 
@@ -560,12 +583,21 @@ class Stat_Analyzer():
             indep = t
         
         for i in range(len(indep)):
-            var = indep[i].replace('.', '_').replace(' ', '_').replace('/', '_').replace(':', '_')
+            var = indep[i].replace('.', '_').replace(' ', '_').replace('/', '_').replace(':', '_').replace('-', '_')
+            if use_mapping:
+                gene = gene_mapping[gene_mapping['variable'] == var]['Gene'].item()
+                out_file = out_format.format(indep = var, med = med, dep = target, gene = gene)
+            else:
+                out_file = out_format.format(indep = var, med = med, dep = target)
+            if var[0].isdigit():
+                var = 'SNP' + var
+            removed = False
             if covariates != 'DNE':
                 if var in covariates:
                     covariates.remove(var)
+                    removed = True
                 covariates_str = '+'.join(covariates)
-            print(var, covariates_str)
+            print(var, med, dep, covariates_str)
             command = [
                 "Rscript",
                 os.path.join(self.r_dir, 'mediationAnalysis.R'),
@@ -576,10 +608,12 @@ class Stat_Analyzer():
                 target, 
                 dep,
                 str(sims),
-                covariates_str
+                covariates_str,
+                out_file
             ]
 
-            covariates.append(var)
+            if covariates != 'DNE' and removed == True:
+                covariates.append(var)
             
             process = subprocess.run(command, capture_output = True, text = True)
             
@@ -606,7 +640,10 @@ class Stat_Analyzer():
         protective = False,
         drop_pairs = True,
         drop_clinical = False,
-        out_file = 'arl.txt'
+        coalesce_genes = False,
+        calc_pvals = True,
+        out_file = 'arl.txt',
+        center = 'Chronotype'
     ):
         '''
         Conducts association rule learning on binarized, OHC data for given target variable.
@@ -622,10 +659,12 @@ class Stat_Analyzer():
             protective (bool) -- if True, the target value will be flipped to find protective features
             drop_pairs (bool) -- if True, columns containing 'pair' will be dropped
             drop_clinical (bool) -- if True, columns that are not SNPs or pairs will be dropped
+            coalesce_genes (bool) -- if True, all snps belonging to the same gene will be represented by a single variable that is the disjunction of all the snps' columns. this requires the columns to be labeled as "{GENE}_{id}", where GENE is the gene name and id is a numeric identifier of the snp. 
+            calc_pvals (bool) -- if True, will calculate p-values for mined rules.
             out_file (str) -- name of output file. requires .txt extension
+            center (str) -- name of the variable to be used as the center vertex for the star layout in the ARL plots.
         '''
         data = self.bin_ohc_wbase.copy(deep = True)
-        print(data.columns)
         target = self.bin_outcome
         # the following column modifications are hot garbage, please make them more efficient
         
@@ -639,16 +678,41 @@ class Stat_Analyzer():
         for col in data.columns:
             if len(data[col].unique()) > 2:
                 data.drop([col], axis=1, inplace=True)
-
-        data = data.astype(int)        
-        if protective:
-            data[target] = ~data[target]
-        data = reorder_cols(data)
+                
         result_folder = os.path.join(self.out_folder, 'association_rule_learning')
         if not os.path.exists(result_folder):
             os.makedirs(result_folder)
+            
+        if coalesce_genes:
+            labels = data.filter(regex = '\w+_\d+').columns
+            genes = list(set(
+                [
+                    label[:label.rindex('_')] for label in labels
+                ]
+            ))
+
+            new_labels = []
+            new_labels_snps = []
+            for gene in genes:
+                snps = data.filter(regex = gene + '_\d+')
+                new_label = gene + '[{}]'.format(str(len(snps.columns)))
+                data[new_label] = snps.any(axis = 1)
+                data.drop(columns = snps.columns, inplace = True)
+
+                new_labels.append(new_label)
+                new_labels_snps.append(', '.join(snps.columns))
+
+            labels_df = pd.DataFrame({'label': new_labels, 'snps': new_labels_snps})
+            labels_path = os.path.join(result_folder, out_file[0:-4] + '_mapping.csv')
+            labels_df.to_csv(labels_path, index = False)
+            print(data.columns)
+
+        data = data.astype(bool)        
+        if protective:
+            data[target] = ~data[target]
+        data = reorder_cols(data)
         data.to_csv(os.path.join(result_folder, 'AprioriData.csv'), index = False)
-        csv_path = os.path.join(result_folder, out_file.split('.')[0] + '.csv')
+        csv_path = os.path.join(result_folder, out_file[0:-3] + 'csv')
 
         command = [
             "Rscript",   
@@ -660,7 +724,8 @@ class Stat_Analyzer():
             str(min_items), 
             target, 
             str(min_lift),
-            csv_path
+            csv_path,
+            center
         ]
         
         process = subprocess.run(command, capture_output = True, text = True)
@@ -677,6 +742,10 @@ class Stat_Analyzer():
             raise Exception('za')
 
         os.remove(os.path.join(result_folder, 'AprioriData.csv'))
+
+        if not calc_pvals:
+            return
+            
         if os.path.exists(csv_path):
             ARLRules = pd.read_csv(csv_path)
             pvals = ARLRules['pValue']
@@ -686,7 +755,7 @@ class Stat_Analyzer():
             print('No rules meeting minimum requirements were found')
             print('Process Terminated')
             return
-
+            
         vars = ARLRules['LHS'].tolist()
         features, newF, rows, pvals = list(), list(), list(), list()
         oddsRatios = pd.DataFrame(columns=['LHS-RHS', 'Odds Ratio', 'Confidence Interval', 'pValue', 'adjusted pVal'])
@@ -754,12 +823,12 @@ class Stat_Analyzer():
         Saves results as a .csv file with given name
         '''
         target = self.cont_outcome
-        y_train = self.cont_ohc[target]
-        x_train_sm = sm.add_constant(self.cont_ohc.drop(columns = [target, 'ID_1']))
+        y = self.cont_ohc[target]
+        X = sm.add_constant(self.cont_ohc.drop(columns = [var for var in [target, 'ID_1'] if var in self.cont_ohc.columns]))
 
-        logm2 = sm.GLM(y_train, x_train_sm, family=sm.families.Gaussian())
+        logm2 = sm.GLM(y, X, family=sm.families.Gaussian())
         res = logm2.fit()
-        self.display_regression_results(x_train_sm.columns, res, out_file)
+        self.display_regression_results(X.columns, res, out_file)
     
     def multivariate_logistic_regression(self, out_file = 'mvlog.csv'):
         '''
@@ -768,9 +837,9 @@ class Stat_Analyzer():
         '''
         target = self.bin_outcome
         y = self.bin_ohc[target]
-        X = self.bin_ohc.drop(columns = ['ID_1'])
+        X = sm.add_constant(self.bin_ohc.drop(columns = [var for var in [target, 'ID_1'] if var in self.bin_ohc.columns]))
 
-        res=sm.GLM(y, X.loc[:, X.columns != 'PHQ9_binary'], family = sm.families.Binomial(link = sm.families.links.logit())).fit()
+        res = sm.GLM(y, X, family = sm.families.Binomial(link = sm.families.links.logit())).fit()
 
         # res = sm.GLM(y, X, family = sm.families.Binomial(link = sm.families.links.logit())).fit()
         self.display_regression_results(X.columns, res, out_file, calc_odds = True)
@@ -782,9 +851,8 @@ class Stat_Analyzer():
         Arguments:
             variable -- list of variables used in regression
             res -- regression results
-            result_file -- where the results will be outputted
+            out_file -- where the results will be outputted
         '''
-        print(res.summary())
         df = pd.DataFrame(variable, columns=["variable"])
         df = pd.merge(
             df,
@@ -816,7 +884,10 @@ class Stat_Analyzer():
         result_folder = os.path.join(self.out_folder, 'regression_results')
         if not os.path.exists(result_folder):
             os.makedirs(result_folder)
-        df.to_csv(os.path.join(result_folder, out_file))
+        df.to_csv(os.path.join(result_folder, out_file), index = False)
+        f = open(os.path.join(result_folder, out_file[:-4] + '.txt'), 'w')
+        f.write(str(res.summary()))
+        f.close()
 
         print("AIC: {}".format(res.aic))
         print("BIC: {}".format(res.bic))

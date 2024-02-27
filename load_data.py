@@ -261,7 +261,7 @@ class DataLoader():
             current_interval = current_intervals[z]
             interval_start = int(current_interval.split('-')[0]) - extra
             interval_end = int(current_interval.split('-')[1]) + extra
-            if verbose:
+            if self.verbose:
                 logging.info('Looking for SNPs in gene interval: {}'.format(str(current_interval)))
 
             for var in bfile:

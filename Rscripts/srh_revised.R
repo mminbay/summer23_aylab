@@ -14,7 +14,7 @@ input_file <- commandArgs(trailingOnly = TRUE)[1]
 snps_file <- commandArgs(trailingOnly = TRUE)[2]
 curr_snp <- commandArgs(trailingOnly = TRUE)[3]
 sex_column <- commandArgs(trailingOnly = TRUE)[4]
-phq9_column <- commandArgs(trailingOnly = TRUE)[5]
+outcome_columns <- commandArgs(trailingOnly = TRUE)[5]
 output_folder <- commandArgs(trailingOnly = TRUE)[6]
 
 ### Assembling the data
@@ -26,9 +26,9 @@ snps <- read.csv(snps_file)
 snps$name <- gsub(":", ".", snps$name)
 
 # Add the if statement to check 'curr_snp'
-if (curr_snp == "single") { # here, the mapped file has a name (snp name) and the gene it belongs to #nolint
+if (curr_snp == "single") { # here, the mapped file has a name (snp name) and the gene it belongs to
     selected_snps <- snps[, c("name", "adjusted.pval", "Gene")]
-} else { # here the name is the snp pair name, and gene1, gene2 are the two genes that the pair of snps belongs to #nolint
+} else { # here the name is the snp pair name, and gene1, gene2 are the two genes that the pair of snps belongs to
     selected_snps <- snps[, c("name", "adjusted.pval", "Gene1", "Gene2")]
 }
 
@@ -43,8 +43,8 @@ for (i in seq_len(nrow(filtered_snps))) {
     } else {
         snp_column <- snp_name
     }
-    to_analyze <- my_data[, c(snp_column, sex_column, phq9_column)]
-    srh_formula <- as.formula(paste(phq9_column, "~", snp_column, "+", sex_column))
+    to_analyze <- my_data[, c(snp_column, sex_column, outcome_column)]
+    srh_formula <- as.formula(paste(outcome_column, "~", snp_column, "+", sex_column))
     
     srh_results <- scheirerRayHare(formula = srh_formula, data = to_analyze)
     
