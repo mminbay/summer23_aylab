@@ -1,6 +1,6 @@
 # summer23_aylab
 
-This repository contains information about the codebase utilized in the [UK Biobank Depression Study](10.1016/j.psychres.2024.115948), and how to use it.
+This repository contains information about the codebase utilized in the [UK Biobank Depression Study](https://doi.org/10.1016/j.psychres.2024.115948), and how to use it.
 ## Prerequisites
 ### Dependencies – Turing Cluster  
 
